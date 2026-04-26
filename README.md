@@ -1,129 +1,232 @@
 # New Energy Storage Dispatch System
 
-## Documentation
+面向“光伏功率预测 + 储能优化调度 + 可视化展示”的新能源侧原型系统。项目以公开数据和仿真数据为基础，构建从数据采集、清洗、特征工程、机器学习预测、深度学习对比、储能调度仿真到前后端展示的完整闭环。
 
-| Path | Purpose |
-|---|---|
-| `PROGRESS.md` | 全局进度锚点和下一步任务 |
-| `docs/project_plan.md` | 项目计划书 |
-| `docs/reports_index.md` | 报告索引 |
-| `docs/references/papers/` | 参考论文 |
+当前代码已经覆盖后端数据流水线、预测模型训练与推理、储能策略评估、治理分析接口，以及 Vue 3 前端展示界面。项目定位不是单一模型脚本，而是一套可复现、可扩展、可演示的毕业设计/工程原型。
 
-## 第三阶段输出
+## 核心能力
 
-含天气特征的主实验配置：
+| 模块 | 已实现内容 | 主要入口 |
+|---|---|---|
+| 数据采集 | PVDAQ、NSRDB、OPSD、Open-Meteo、HRRR 等公开数据链路配置与准备 | `new_energy_sys.cli.bootstrap_data` |
+| 数据治理 | 字段标准化、小时级对齐、缺失值处理、异常值检查、质量报告 | `clean_data.py`、`standardize.py` |
+| 特征工程 | 时间特征、天气特征、历史功率特征、储能调度特征、多步预测标签 | `build_features.py`、`features.py` |
+| 预测模型 | LightGBM、XGBoost、CatBoost、TCN、CNN-LSTM、Attention-LSTM 对比 | `train_baseline.py`、`train_tcn.py`、`run_stage14_deep_learning.py` |
+| 推理链路 | 主模型批量推理、预测结果导出、物理边界裁剪 | `run_stage9_inference.py` |
+| 储能调度 | 单次调度、策略敏感性、滚动优化、配置敏感性分析 | `run_stage10_dispatch.py` 至 `run_stage15_sensitivity.py` |
+| API 服务 | 鉴权、模型指标、预测结果、调度指标、报告读取、任务触发 | `src/new_energy_sys/api/main.py` |
+| 前端界面 | 总览大屏、模型对比、调度仿真、数据探索、报告查看、登录鉴权 | `frontend/` |
 
-```powershell
-python -m new_energy_sys.cli.bootstrap_data --config configs/data_sources.nrel_opsd_weather.json
-python -m new_energy_sys.cli.clean_data --config configs/data_sources.nrel_opsd_weather.json --input data/processed/nrel_opsd_weather/hourly_training_with_storage.parquet
-python -m new_energy_sys.cli.build_features --config configs/data_sources.nrel_opsd_weather.json --input data/processed/nrel_opsd_weather/stage2_cleaned_hourly_dataset.parquet
-```
-
-仅 DA/HA4 天气代理的旧配置仍可作为消融对照：
-
-```powershell
-python -m new_energy_sys.cli.build_features --config configs/data_sources.nrel_opsd.json --input data/processed/nrel_opsd/stage2_cleaned_hourly_dataset.parquet
-```
-
-生成文件：
-
-| 文件 | 作用 |
-|---|---|
-| `data/processed/nrel_opsd/stage3_feature_dataset.parquet` | 第三阶段模型特征数据集 |
-| `data/processed/nrel_opsd/stage3_feature_dataset_preview.csv` | 前 200 行预览 |
-| `data/processed/nrel_opsd/stage3_feature_report.md` | 特征工程质量报告 |
-| `data/processed/nrel_opsd/stage3_feature_report.json` | 机器可读质量指标 |
-
-当前第三阶段输出样本数为 `8560`，总字段数为 `92`，其中派生特征 `76` 个。特征覆盖时间周期、天气代理、历史功率、储能调度四类，并额外生成 `1h`、`6h`、`24h` 多步预测标签。
-
-含天气特征的主实验输出样本数为 `8560`，总字段数为 `145`，其中派生特征 `112` 个。天气字段包含 GHI、DNI、DHI、温度、湿度、露点、云量、风速、阵风、气压、降水和大气顶辐射等。
-
-Pitfall：当前天气数据是按站点坐标和 UTC 时间对齐的外部气象补充数据，不能写成电站实测气象。
-
-## 第四阶段输出
-
-运行 LightGBM 基线训练命令：
-
-```powershell
-python -m new_energy_sys.cli.train_baseline --config configs/data_sources.nrel_opsd_weather.json --input data/processed/nrel_opsd_weather/stage3_feature_dataset.parquet
-```
-
-生成文件：
-
-| 文件 | 作用 |
-|---|---|
-| `data/processed/nrel_opsd_weather/stage4_lightgbm_metrics.csv` | 验证集/测试集误差指标 |
-| `data/processed/nrel_opsd_weather/stage4_lightgbm_predictions.csv` | 验证集/测试集预测结果 |
-| `data/processed/nrel_opsd_weather/stage4_lightgbm_feature_importance.csv` | LightGBM 特征重要性 |
-| `data/processed/nrel_opsd_weather/stage4_lightgbm_report.md` | 第四阶段建模报告 |
-| `data/processed/nrel_opsd_weather/models/` | 9 个 LightGBM 模型包 |
-
-当前训练 `3` 个预测 horizon（`1h`、`6h`、`24h`）和 `3` 个特征组（`forecast_time`、`weather_enhanced`、`full_features`），共 `9` 个模型。最佳测试结果：`1h` nRMSE `0.0480`，`6h` nRMSE `0.0954`，`24h` nRMSE `0.1076`。
-
-Pitfall：LightGBM 是无约束回归器，单独加载模型推理时必须使用 `predict_with_bundle` 统一裁剪到物理边界，不能直接使用裸模型输出。
-
-面向“光伏功率预测 + 储能调度仿真”的最小可运行工程骨架。
-
-## 当前阶段
-
-已进入第一阶段：数据采集、字段标准化、小时级对齐、储能仿真标签生成。
+## 系统架构
 
 ```mermaid
 flowchart LR
-    A["PVDAQ / DuraMAT / OEDI 光伏数据"] --> B["原始数据落盘"]
-    C["Open-Meteo / NASA POWER 天气数据"] --> B
-    D["OPSD 负荷/电价数据"] --> B
-    B --> E["统一时间戳与字段"]
-    E --> F["小时级训练表"]
-    F --> G["储能SOC与充放电仿真"]
+    A["公开数据源<br/>PVDAQ / NSRDB / OPSD / HRRR"] --> B["数据落盘<br/>data/raw"]
+    B --> C["标准化与清洗<br/>字段统一 / 小时对齐 / 质量检查"]
+    C --> D["特征工程<br/>时间 / 天气 / 历史功率 / 储能状态"]
+    D --> E["预测模型<br/>LightGBM / TCN / CNN-LSTM / Attention-LSTM"]
+    E --> F["推理输出<br/>1h / 6h / 24h 光伏功率预测"]
+    F --> G["储能调度<br/>规则策略 / 滚动优化 / 敏感性分析"]
+    G --> H["FastAPI 服务<br/>指标 / 报告 / 任务接口"]
+    H --> I["Vue 前端<br/>看板 / 图表 / 报告 / 操作入口"]
 ```
 
+Pitfall：公开数据源的时间戳、时区和预测可用时间不同，不能把实测天气、事后天气和日前预测天气混用，否则会产生时间泄漏。
+
+## 技术栈
+
+| 层级 | 技术 |
+|---|---|
+| 后端语言 | Python 3.11+ |
+| 数据处理 | pandas、numpy、pyarrow |
+| 机器学习 | LightGBM、scikit-learn、XGBoost、CatBoost |
+| 深度学习 | PyTorch |
+| API | FastAPI |
+| 前端 | Vue 3、Vite、Element Plus、ECharts、Playwright |
+| 数据格式 | JSON、CSV、Parquet、Markdown 报告 |
+
+Pitfall：`requirements.txt` 是核心建模依赖清单；运行 API、深度学习或前端测试时，需要按对应模块额外安装 FastAPI、PyTorch、Node 依赖和 Playwright 浏览器。
+
+## 目录结构
+
+| 路径 | 说明 |
+|---|---|
+| `configs/` | 数据源、站点、天气、储能参数和实验配置 |
+| `src/new_energy_sys/` | 后端核心包，包含数据处理、建模、调度和 API |
+| `src/new_energy_sys/cli/` | 各阶段命令行入口 |
+| `src/new_energy_sys/api/` | FastAPI 应用、鉴权、数据加载和任务接口 |
+| `frontend/` | Vue 3 前端工程 |
+| `reports/` | 阶段报告、图表和实验输出索引 |
+| `docs/` | 项目计划、前端交接文档、参考论文和报告索引 |
+| `scripts/` | 报告生成、API smoke 测试等辅助脚本 |
+| `data/raw/` | 原始数据缓存目录，不纳入 Git |
+| `data/processed/` | 处理后数据、模型和实验产物，不纳入 Git |
+
+Pitfall：`data/raw/` 和 `data/processed/` 默认被 `.gitignore` 排除；克隆仓库后需要重新运行数据流水线生成本地实验产物。
+
 ## 快速开始
+
+### 1. 后端环境
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-python -m new_energy_sys.cli.bootstrap_data --config configs/data_sources.nrel_opsd.json
-python -m new_energy_sys.cli.clean_data --config configs/data_sources.nrel_opsd.json --input data/processed/nrel_opsd/hourly_training_with_storage.parquet
+pip install -e .
 ```
 
-## 目录说明
+如需运行 API 或深度学习实验，继续安装：
 
-| 路径 | 作用 |
+```powershell
+pip install fastapi uvicorn torch xgboost catboost
+```
+
+Pitfall：Windows PowerShell 如果禁止激活虚拟环境，需要先调整执行策略，或直接使用 `.venv\Scripts\python.exe -m ...` 执行命令。
+
+### 2. 前端环境
+
+```powershell
+cd frontend
+npm install
+npm run build
+```
+
+本地开发：
+
+```powershell
+npm run dev
+```
+
+Pitfall：前端默认访问 `/api`，开发时需要同时启动后端，或在代理/环境变量中指向可用 API。
+
+## 数据与建模流水线
+
+推荐使用 PVDAQ + NSRDB 主实验配置：
+
+```powershell
+$env:NREL_API_KEY="your_nrel_api_key"
+$env:NREL_API_EMAIL="your_email@example.com"
+$env:PYTHONPATH="src"
+
+python -m new_energy_sys.cli.bootstrap_data --config configs/data_sources.pvdaq_nsrdb_2020_2022.json
+python -m new_energy_sys.cli.clean_data --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --input data/processed/pvdaq_nsrdb_2020_2022/hourly_training_with_storage.parquet
+python -m new_energy_sys.cli.build_features --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --input data/processed/pvdaq_nsrdb_2020_2022/stage2_cleaned_hourly_dataset.parquet
+```
+
+训练 LightGBM 基线：
+
+```powershell
+python -m new_energy_sys.cli.train_baseline --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --input data/processed/pvdaq_nsrdb_2020_2022/stage3_feature_dataset.parquet
+```
+
+运行主模型推理：
+
+```powershell
+python -m new_energy_sys.cli.run_stage9_inference --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --input data/processed/pvdaq_nsrdb_2020_2022/stage3_feature_dataset.parquet
+```
+
+运行储能调度与后续分析：
+
+```powershell
+python -m new_energy_sys.cli.run_stage10_dispatch --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --predictions data/processed/pvdaq_nsrdb_2020_2022/stage9_main_model_predictions.csv --feature-input data/processed/pvdaq_nsrdb_2020_2022/stage3_feature_dataset.parquet
+python -m new_energy_sys.cli.run_stage12_rolling --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --predictions data/processed/pvdaq_nsrdb_2020_2022/stage9_main_model_predictions.csv --feature-input data/processed/pvdaq_nsrdb_2020_2022/stage3_feature_dataset.parquet
+python -m new_energy_sys.cli.run_stage13_governance --config configs/data_sources.pvdaq_nsrdb_2020_2022.json --dispatch-input data/processed/pvdaq_nsrdb_2020_2022/stage12_rolling_dispatch.csv --metrics-input data/processed/pvdaq_nsrdb_2020_2022/stage12_rolling_metrics.json
+```
+
+Pitfall：训练、推理和调度阶段依赖前一阶段输出文件；如果路径或配置的 `dataset_id` 不一致，会导致 API 和前端读取不到最新结果。
+
+## API 服务
+
+开发环境启动：
+
+```powershell
+$env:PYTHONPATH="src"
+uvicorn new_energy_sys.api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+主要接口：
+
+| 接口 | 说明 |
 |---|---|
-| `configs/data_sources.example.json` | 数据源、站点、储能参数配置 |
-| `configs/data_sources.nrel_opsd.json` | NREL太阳能集成数据 + OPSD主实验配置 |
-| `src/new_energy_sys/data_sources.py` | 公开数据源下载器 |
-| `src/new_energy_sys/standardize.py` | 字段标准化与时间对齐 |
-| `src/new_energy_sys/cleaning.py` | 第二阶段数据清洗、异常处理、质量报告 |
-| `src/new_energy_sys/storage.py` | 储能规则仿真 |
-| `src/new_energy_sys/cli/bootstrap_data.py` | 第一阶段入口脚本 |
-| `src/new_energy_sys/cli/clean_data.py` | 第二阶段清洗入口脚本 |
-| `data/raw` | 原始数据缓存目录 |
-| `data/processed` | 标准化输出目录 |
+| `POST /api/auth/login` | 登录并获取 JWT |
+| `GET /api/config` | 读取前端配置摘要 |
+| `GET /api/models/main` | 主模型指标 |
+| `GET /api/predictions/main` | 主模型预测结果 |
+| `GET /api/dispatch/metrics/{stage}` | 储能调度阶段指标 |
+| `GET /api/governance/scorecard` | 治理评分卡 |
+| `GET /api/sensitivity/metrics` | 储能配置敏感性指标 |
+| `GET /api/reports/list` | 可读报告列表 |
+| `POST /api/tasks/submit` | 提交后端任务 |
 
-## 数据策略
+生产环境必须显式配置安全变量：
 
-主实验版不依赖人工下载。
+```powershell
+$env:NES_APP_ENV="production"
+$env:NES_JWT_SECRET="replace-with-a-strong-secret"
+$env:NES_CORS_ORIGINS="https://your-frontend-domain.example"
+$env:NES_USERS_JSON='{"admin":{"password_hash":"<sha256>","role":"admin"}}'
+```
 
-- 光伏功率：当前主链路使用 NREL Solar Power Data for Integration Studies。
-- PV预测特征：使用 NREL ZIP 内置 `DA` 与 `HA4` 功率预测文件。
-- 负荷/电价：使用 OPSD 负荷/电价数据生成星期-小时画像，并映射到 NREL 2006 时间轴。
-- 储能：使用规则仿真生成 SOC、充电、放电、收益字段。
+Pitfall：生产环境不能使用默认 JWT secret、默认用户或宽松 CORS，否则后端会拒绝启动或产生安全风险。
 
-Pitfall：PVDAQ 文件体积可能超过 100MB，首次下载慢；若网络环境不稳定，建议先改用较小样例数据跑通链路。
+## 前端界面
 
-## 第二阶段输出
+前端位于 `frontend/`，包含以下页面：
 
-运行清洗命令后生成：
-
-| 文件 | 作用 |
+| 页面 | 内容 |
 |---|---|
-| `data/processed/stage2_cleaned_hourly_dataset.parquet` | 清洗后的小时级数据 |
-| `data/processed/stage2_cleaned_hourly_dataset_preview.csv` | 前200行预览 |
-| `data/processed/stage2_standardized_feature_dataset.parquet` | 带 `*_z` 标准化特征的数据 |
-| `data/processed/stage2_quality_report.md` | 阶段质量报告 |
-| `data/processed/stage2_quality_report.json` | 机器可读质量指标 |
+| OverviewDashboard | 核心指标、预测曲线、运行概览 |
+| ModelComparison | 表格模型和深度模型对比 |
+| DispatchSimulation | 储能充放电、收益和约束表现 |
+| GovernanceAnalysis | 策略治理、风险门槛和敏感性 |
+| DataExplorer | 数据质量、特征字段、后端任务入口 |
+| ReportViewer | 阶段报告 Markdown 查看 |
+| Login | JWT 登录 |
 
-当前主实验配置 `configs/data_sources.nrel_opsd.json` 清洗后样本数为 `8752`，目标小时覆盖率约为 `99.9%`，可作为后续特征工程和基线建模入口。
+常用命令：
+
+```powershell
+cd frontend
+npm run dev
+npm run build
+npm run test
+npm run test:e2e
+```
+
+Pitfall：E2E 测试依赖后端 API 和 Playwright 浏览器环境；只运行 `npm run test` 时执行的是静态检查，不等价于完整端到端验证。
+
+## 配置说明
+
+| 配置文件 | 用途 |
+|---|---|
+| `configs/data_sources.example.json` | 通用模板 |
+| `configs/data_sources.pvdaq_nsrdb_2020_2022.json` | PVDAQ + NSRDB 主实验链路 |
+| `configs/data_sources.pvdaq_nsrdb_2022_2023.json` | 后续年份扩展实验 |
+| `configs/data_sources.nrel_opsd_weather.json` | NREL + OPSD + 天气特征实验 |
+| `configs/data_sources.pvdaq_openmeteo_forecast.json` | Open-Meteo 预测天气实验 |
+| `configs/data_sources.pvdaq_hrrr_strict_2022_01_f24.json` | HRRR 严格预测天气样例 |
+
+Pitfall：配置文件中的 `api_key_env` 和 `email_env` 是环境变量名，不应把真实密钥写入 JSON 并提交到 Git。
+
+## 文档与报告
+
+| 路径 | 说明 |
+|---|---|
+| `PROGRESS.md` | 项目阶段进度和交接锚点 |
+| `docs/project_plan.md` | 项目计划书 |
+| `docs/frontend_production_handover.md` | 前端生产化整改记录 |
+| `docs/reports_index.md` | 报告索引 |
+| `reports/*.md` | 阶段实验报告 |
+| `reports/figures/` | 实验图表 |
+
+Pitfall：部分历史文档可能存在编码不一致问题，根 README 以当前代码结构和可执行入口为准。
+
+## 当前阶段进度
+
+- 已完成：数据采集、清洗、特征工程、LightGBM 基线、表格模型对比、深度学习对比、主模型推理、储能调度、滚动优化、治理分析、敏感性分析。
+- 已完成：FastAPI 服务和 Vue 3 前端展示框架。
+- 已完成：前端生产化基础整改，包括 API 错误归一化、JWT secret 生产校验、CORS 白名单、Markdown 清洗和静态检查。
+- 下一阶段建议：统一修复历史文档编码，补充 API/前端一键启动脚本，完善 CI，固化最小可复现实验数据样例。
+
+Pitfall：项目已经超过单脚本阶段，后续改动应优先保持“配置 -> 数据 -> 模型 -> 推理 -> 调度 -> API -> 前端”的链路一致性，避免只改某一层导致展示端失真。
