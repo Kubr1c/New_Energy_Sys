@@ -1,0 +1,74 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed/pvdaq_openmeteo_forecast"
+  },
+  "site": {
+    "name": "pvdaq_system_10_openmeteo_forecast",
+    "latitude": 39.7404,
+    "longitude": -105.1774,
+    "capacity_kw": 1.12
+  },
+  "date_range": {
+    "start": "2022-01-01",
+    "end": "2022-12-31"
+  },
+  "sources": {
+    "pv_power": {
+      "kind": "pvdaq_s3_year",
+      "bucket_url": "https://oedi-data-lake.s3.amazonaws.com",
+      "system_id": 10,
+      "year": 2022,
+      "download_workers": 16,
+      "timestamp_candidates": ["measured_on"],
+      "power_candidates": ["ac_power__423"],
+      "power_unit": "W"
+    },
+    "weather": {
+      "kind": "open_meteo_historical_forecast",
+      "url": "https://historical-forecast-api.open-meteo.com/v1/forecast",
+      "assumed_lead_time_hour": 24,
+      "timeout_seconds": 120,
+      "hourly_fields": [
+        "temperature_2m",
+        "relative_humidity_2m",
+        "dew_point_2m",
+        "surface_pressure",
+        "pressure_msl",
+        "precipitation",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "wind_gusts_10m",
+        "shortwave_radiation",
+        "direct_radiation",
+        "direct_normal_irradiance",
+        "diffuse_radiation",
+        "cloud_cover",
+        "cloud_cover_low",
+        "cloud_cover_mid",
+        "cloud_cover_high"
+      ]
+    },
+    "opsd": {
+      "kind": "local_csv",
+      "path": "data/raw/opsd/opsd_dk_profile_source_2015_01.csv",
+      "timestamp_candidates": ["utc_timestamp", "timestamp", "datetime"],
+      "load_candidates": ["DK_1_load_actual_entsoe_transparency", "DK_load_actual_entsoe_transparency"],
+      "price_candidates": ["DK_1_price_day_ahead", "DK_2_price_day_ahead"],
+      "align": "profile_to_pv_timeline"
+    }
+  },
+  "storage": {
+    "capacity_kwh": 2.24,
+    "max_charge_kw": 0.56,
+    "max_discharge_kw": 0.56,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 25.0,
+    "discharge_price_threshold": 45.0
+  }
+}

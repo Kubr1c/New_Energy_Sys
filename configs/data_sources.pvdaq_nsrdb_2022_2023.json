@@ -1,0 +1,81 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed/pvdaq_nsrdb_2022_2023"
+  },
+  "site": {
+    "name": "pvdaq_system_10_nsrdb_2022_2023",
+    "latitude": 39.7404,
+    "longitude": -105.1774,
+    "capacity_kw": 1.12
+  },
+  "date_range": {
+    "start": "2022-01-01",
+    "end": "2023-02-28"
+  },
+  "sources": {
+    "pv_power": {
+      "kind": "pvdaq_s3_years",
+      "bucket_url": "https://oedi-data-lake.s3.amazonaws.com",
+      "system_id": 10,
+      "years": [2022, 2023],
+      "download_workers": 16,
+      "timestamp_candidates": ["measured_on"],
+      "power_candidates": ["ac_power__423"],
+      "power_unit": "W"
+    },
+    "weather": {
+      "kind": "nsrdb",
+      "url": "https://developer.nlr.gov/api/nsrdb/v2/solar/nsrdb-GOES-aggregated-v4-0-0-download.csv",
+      "api_key_env": "NREL_API_KEY",
+      "email_env": "NREL_API_EMAIL",
+      "full_name": "New Energy Sys",
+      "affiliation": "Academic",
+      "reason": "research",
+      "mailing_list": false,
+      "interval": 60,
+      "leap_day": false,
+      "merged_target_name": "nsrdb_system10_2022_2023.csv",
+      "attributes": [
+        "dhi",
+        "dni",
+        "ghi",
+        "clearsky_dhi",
+        "clearsky_dni",
+        "clearsky_ghi",
+        "cloud_type",
+        "dew_point",
+        "air_temperature",
+        "surface_pressure",
+        "relative_humidity",
+        "solar_zenith_angle",
+        "surface_albedo",
+        "total_precipitable_water",
+        "wind_direction",
+        "wind_speed",
+        "fill_flag"
+      ]
+    },
+    "opsd": {
+      "kind": "local_csv",
+      "path": "data/raw/opsd/opsd_dk_profile_source_2015_01.csv",
+      "timestamp_candidates": ["utc_timestamp", "timestamp", "datetime"],
+      "load_candidates": ["DK_1_load_actual_entsoe_transparency", "DK_load_actual_entsoe_transparency"],
+      "price_candidates": ["DK_1_price_day_ahead", "DK_2_price_day_ahead"],
+      "align": "profile_to_pv_timeline"
+    }
+  },
+  "storage": {
+    "capacity_kwh": 2.24,
+    "max_charge_kw": 0.56,
+    "max_discharge_kw": 0.56,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 25.0,
+    "discharge_price_threshold": 45.0
+  }
+}

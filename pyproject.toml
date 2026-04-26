@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "new-energy-sys"
+version = "0.1.0"
+description = "PV forecasting and energy storage dispatch prototype."
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "requests>=2.31.0",
+  "pyarrow>=15.0.0",
+  "lightgbm>=4.6.0",
+  "scikit-learn>=1.4.0",
+  "torch>=2.0.0",
+  "xgboost>=2.0.0",
+  "catboost>=1.2.0"
+]
+
+[project.scripts]
+new-energy-bootstrap-data = "new_energy_sys.cli.bootstrap_data:main"
+new-energy-clean-data = "new_energy_sys.cli.clean_data:main"
+new-energy-build-features = "new_energy_sys.cli.build_features:main"
+new-energy-train-baseline = "new_energy_sys.cli.train_baseline:main"
+new-energy-optimize-lightgbm = "new_energy_sys.cli.optimize_lightgbm:main"
+new-energy-train-tcn = "new_energy_sys.cli.train_tcn:main"
+new-energy-run-stage7 = "new_energy_sys.cli.run_stage7:main"
+new-energy-compare-tabular-models = "new_energy_sys.cli.compare_tabular_models:main"
+new-energy-run-stage9-inference = "new_energy_sys.cli.run_stage9_inference:main"
+new-energy-run-stage10-dispatch = "new_energy_sys.cli.run_stage10_dispatch:main"
+new-energy-run-stage11-strategy = "new_energy_sys.cli.run_stage11_strategy:main"
+new-energy-run-stage12-rolling = "new_energy_sys.cli.run_stage12_rolling:main"
+new-energy-run-stage13-governance = "new_energy_sys.cli.run_stage13_governance:main"
+new-energy-run-stage14-deep-learning = "new_energy_sys.cli.run_stage14_deep_learning:main"
+new-energy-run-stage15-sensitivity = "new_energy_sys.cli.run_stage15_sensitivity:main"
+new-energy-prepare-forecast-weather = "new_energy_sys.cli.prepare_forecast_weather:main"
+new-energy-prepare-hrrr-sample = "new_energy_sys.cli.prepare_hrrr_sample:main"
+new-energy-prepare-hrrr-month = "new_energy_sys.cli.prepare_hrrr_month:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

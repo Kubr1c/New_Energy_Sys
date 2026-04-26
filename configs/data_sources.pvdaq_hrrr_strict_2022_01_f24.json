@@ -1,0 +1,53 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed/pvdaq_hrrr_strict_2022_01_f24"
+  },
+  "site": {
+    "name": "pvdaq_system_10_hrrr_strict_2022_01_f24",
+    "latitude": 39.7404,
+    "longitude": -105.1774,
+    "capacity_kw": 1.12
+  },
+  "date_range": {
+    "start": "2022-01-01",
+    "end": "2022-01-31"
+  },
+  "sources": {
+    "pv_power": {
+      "kind": "pvdaq_s3_years",
+      "bucket_url": "https://oedi-data-lake.s3.amazonaws.com",
+      "system_id": 10,
+      "years": [2022],
+      "download_workers": 16,
+      "timestamp_candidates": ["measured_on"],
+      "power_candidates": ["ac_power__423"],
+      "power_unit": "W"
+    },
+    "weather": {
+      "kind": "local_csv",
+      "path": "data/raw/weather_hrrr/system10_hrrr_2022_01_f24.csv"
+    },
+    "opsd": {
+      "kind": "local_csv",
+      "path": "data/raw/opsd/opsd_dk_profile_source_2015_01.csv",
+      "timestamp_candidates": ["utc_timestamp", "timestamp", "datetime"],
+      "load_candidates": ["DK_1_load_actual_entsoe_transparency", "DK_load_actual_entsoe_transparency"],
+      "price_candidates": ["DK_1_price_day_ahead", "DK_2_price_day_ahead"],
+      "align": "profile_to_pv_timeline"
+    }
+  },
+  "storage": {
+    "capacity_kwh": 2.24,
+    "max_charge_kw": 0.56,
+    "max_discharge_kw": 0.56,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 25.0,
+    "discharge_price_threshold": 45.0
+  }
+}

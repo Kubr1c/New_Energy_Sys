@@ -1,0 +1,51 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed/nrel_opsd"
+  },
+  "site": {
+    "name": "nrel_alabama_upv_70mw",
+    "latitude": 30.45,
+    "longitude": -88.25,
+    "capacity_kw": 70000.0
+  },
+  "date_range": {
+    "start": "2006-01-01",
+    "end": "2006-12-31"
+  },
+  "sources": {
+    "pv_power": {
+      "kind": "nrel_solar_zip",
+      "url": "https://www.nrel.gov/media/docs/libraries/grid/zip/al-pv-2006.zip",
+      "timezone": "America/Chicago",
+      "capacity_mw": 70.0,
+      "actual_member": "Actual_30.45_-88.25_2006_UPV_70MW_5_Min.csv",
+      "day_ahead_member": "DA_30.45_-88.25_2006_UPV_70MW_60_Min.csv",
+      "hour_ahead_member": "HA4_30.45_-88.25_2006_UPV_70MW_60_Min.csv"
+    },
+    "weather": {
+      "kind": "disabled"
+    },
+    "opsd": {
+      "kind": "local_csv",
+      "path": "data/raw/opsd/opsd_dk_profile_source_2015_01.csv",
+      "timestamp_candidates": ["utc_timestamp", "timestamp", "datetime"],
+      "load_candidates": ["DK_1_load_actual_entsoe_transparency", "DK_load_actual_entsoe_transparency"],
+      "price_candidates": ["DK_1_price_day_ahead", "DK_2_price_day_ahead"],
+      "align": "profile_to_pv_timeline"
+    }
+  },
+  "storage": {
+    "capacity_kwh": 140000.0,
+    "max_charge_kw": 35000.0,
+    "max_discharge_kw": 35000.0,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 25.0,
+    "discharge_price_threshold": 45.0
+  }
+}

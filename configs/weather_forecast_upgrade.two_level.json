@@ -1,0 +1,69 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed/forecast_weather_upgrade"
+  },
+  "site": {
+    "name": "forecast_weather_upgrade_reference_site",
+    "latitude": 30.45,
+    "longitude": -88.25,
+    "capacity_kw": 70000.0
+  },
+  "date_range": {
+    "start": "2022-01-01",
+    "end": "2022-12-31"
+  },
+  "sources": {
+    "level_1_weather": {
+      "kind": "open_meteo_historical_forecast",
+      "url": "https://historical-forecast-api.open-meteo.com/v1/forecast",
+      "assumed_lead_time_hour": 24,
+      "timeout_seconds": 120,
+      "hourly_fields": [
+        "temperature_2m",
+        "relative_humidity_2m",
+        "dew_point_2m",
+        "surface_pressure",
+        "pressure_msl",
+        "precipitation",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "wind_gusts_10m",
+        "shortwave_radiation",
+        "direct_radiation",
+        "direct_normal_irradiance",
+        "diffuse_radiation",
+        "cloud_cover",
+        "cloud_cover_low",
+        "cloud_cover_mid",
+        "cloud_cover_high"
+      ]
+    },
+    "level_2_weather": {
+      "kind": "hrrr_archive",
+      "archive": "https://registry.opendata.aws/noaa-hrrr-pds/",
+      "bucket": "noaa-hrrr-bdp-pds",
+      "preferred_product": "wrfsfcf",
+      "lead_times_hour": [1, 6, 24]
+    },
+    "pv_power": {
+      "kind": "pending_aligned_2021_plus_source"
+    },
+    "opsd": {
+      "kind": "profile_to_pv_timeline_after_pv_source_selected"
+    }
+  },
+  "storage": {
+    "capacity_kwh": 140000.0,
+    "max_charge_kw": 35000.0,
+    "max_discharge_kw": 35000.0,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 25.0,
+    "discharge_price_threshold": 45.0
+  }
+}

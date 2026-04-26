@@ -1,0 +1,57 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed"
+  },
+  "site": {
+    "name": "pvdaq_system_4",
+    "latitude": 39.742,
+    "longitude": -105.18,
+    "capacity_kw": 1000.0
+  },
+  "date_range": {
+    "start": "2010-02-25",
+    "end": "2010-03-07"
+  },
+  "sources": {
+    "pv_power": {
+      "kind": "csv_url",
+      "url": "https://datahub.duramat.org/dataset/a49bb656-7b36-437a-8089-1870a40c2a7d/resource/d2c3fcf4-4f5f-47ad-8743-fc29f1356835/download/pvdaq_system_4_2010-2016_subset_soil_signal.csv",
+      "timestamp_candidates": ["Unnamed: 0", "measured_on", "timestamp", "datetime", "date_time"],
+      "power_candidates": ["ac_power", "power", "dc_power", "inv_pac", "system_power"],
+      "max_rows": 200000
+    },
+    "weather": {
+      "kind": "from_pv_power",
+      "field_map": {
+        "poa_irradiance": "ghi_wm2",
+        "ambient_temp": "temperature_c",
+        "wind_speed": "wind_speed_ms",
+        "dhi_nsrdb": "dhi_wm2",
+        "dni_nsrdb": "dni_wm2",
+        "ghi_nsrdb": "ghi_wm2"
+      }
+    },
+    "opsd": {
+      "kind": "synthetic_market",
+      "base_load_mw": 1000.0,
+      "daily_load_amplitude_mw": 180.0,
+      "base_price_eur_mwh": 55.0,
+      "peak_price_eur_mwh": 110.0,
+      "valley_price_eur_mwh": 25.0
+    }
+  },
+  "storage": {
+    "capacity_kwh": 2000.0,
+    "max_charge_kw": 500.0,
+    "max_discharge_kw": 500.0,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 35.0,
+    "discharge_price_threshold": 80.0
+  }
+}
