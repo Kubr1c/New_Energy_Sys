@@ -4,7 +4,7 @@
       v-if="loading"
       type="loading"
       title="正在加载调度仿真"
-      message="正在读取策略治理评分与调度收益指标。"
+      message="正在读取策略治理评分、Rawhide 实站映射和退化回放指标。"
     />
     <PageState
       v-else-if="error"
@@ -15,111 +15,232 @@
       @retry="loadScorecard"
     />
     <PageState
-      v-else-if="!scorecard.length"
+      v-else-if="!scorecard.length && !rawhideAvailable"
       type="empty"
       title="暂无调度策略数据"
-      message="当前接口没有返回可展示的策略评分。"
+      message="当前接口没有返回可展示的策略评分或 Rawhide 仿真结果。"
       retryable
       @retry="loadScorecard"
     />
     <template v-else>
-    <!-- Strategy Cards -->
-    <div class="strategy-row">
-      <div v-for="(s, i) in scorecard" :key="s.scenario_id" class="strategy-card glass-card animate-fade-in-up" :class="['animate-delay-' + (i + 1), decisionClass(s.governance_decision)]">
-        <div class="sc-header">
-          <span class="sc-decision" :class="decisionClass(s.governance_decision)">{{ s.governance_decision }}</span>
-          <span class="sc-score display-number">{{ Number(s.governance_score).toFixed(1) }}</span>
+      <section v-if="rawhideAvailable" class="rawhide-section">
+        <div class="rawhide-hero glass-panel">
+          <div>
+            <span class="kicker">S18 Real-Plant Reference Simulation</span>
+            <h2>{{ referenceSite.name || 'Rawhide Prairie Solar' }}</h2>
+            <p>{{ referenceSite.location || 'Larimer County, Colorado' }}</p>
+          </div>
+          <div class="rawhide-facts">
+            <div><span>PV</span><strong>{{ formatMw(referenceSite.pv_capacity_kw_ac) }}</strong></div>
+            <div><span>BESS</span><strong>{{ formatKw(referenceSite.battery_power_kw) }} / {{ formatKwh(referenceSite.battery_energy_kwh) }}</strong></div>
+            <div><span>COD</span><strong>{{ referenceSite.commercial_operation_year || '2021' }}</strong></div>
+            <div><span>Scale</span><strong>{{ formatNumber(rawhideScaling.source_scale_factor, 3) }}</strong></div>
+          </div>
         </div>
-        <h4 class="sc-name">{{ s.scenario_id }}</h4>
-        <p class="sc-type">{{ s.strategy_type }}</p>
-        <div class="sc-metrics">
-          <div class="sc-metric"><span class="sc-ml">收益 Revenue</span><span class="sc-mv display-number">€{{ Number(s.total_storage_revenue_eur).toFixed(2) }}</span></div>
-          <div class="sc-metric"><span class="sc-ml">增量 Incr.</span><span class="sc-mv display-number" :class="Number(s.incremental_revenue_eur) >= 0 ? 'positive' : 'negative'">€{{ Number(s.incremental_revenue_eur).toFixed(3) }}</span></div>
-          <div class="sc-metric"><span class="sc-ml">循环 Cycles</span><span class="sc-mv display-number">{{ Number(s.cycle_equivalent_count).toFixed(1) }}</span></div>
-          <div class="sc-metric"><span class="sc-ml">均值SOC</span><span class="sc-mv display-number">{{ (Number(s.mean_soc) * 100).toFixed(1) }}%</span></div>
-        </div>
-        <p class="sc-reason">{{ s.decision_reason }}</p>
-      </div>
-    </div>
 
-    <!-- Charts Row -->
-    <div class="chart-row">
-      <div class="glass-card chart-card animate-fade-in-up animate-delay-3">
-        <h3>策略评分对比 — Strategy Scores</h3>
-        <v-chart class="chart" :option="scoreBarOption" theme="dark-tech" autoresize />
+        <div class="boundary-panel glass-panel">
+          <strong>边界说明</strong>
+          <p>Rawhide 使用公开容量参数；发电曲线由 PVDAQ System 10 等比例放大；电价仍为 OPSD 映射价格。因此该页面用于策略相对价值演示，不代表 Rawhide 实测结算收益。</p>
+        </div>
+
+        <div class="rawhide-metric-grid">
+          <div v-for="item in rawhideKpis" :key="item.label" class="rawhide-metric glass-card">
+            <span>{{ item.label }}</span>
+            <strong class="display-number" :class="item.className">{{ item.value }}</strong>
+            <small>{{ item.hint }}</small>
+          </div>
+        </div>
+
+        <div class="chart-row">
+          <ChartCard title="Rawhide 策略增量收益 — Incremental Revenue">
+            <p class="chart-note">红色为负收益或失败基线，橙色为离线上界，青色为滚动策略结果。</p>
+            <v-chart class="chart" :option="rawhideRevenueOption" theme="dark-tech" autoresize />
+          </ChartCard>
+          <ChartCard title="退化后净收益 — Degradation Replay">
+            <div class="degradation-panel">
+              <div class="degradation-main">
+                <span>Rainflow net incremental revenue</span>
+                <strong class="display-number negative">{{ formatCurrency(degradationRecommended.net_incremental_revenue_eur) }}</strong>
+                <p>净收益已扣除循环退化成本。若为负值，表示储能策略收益不足以覆盖退化损失。</p>
+              </div>
+              <div class="degradation-list">
+                <div><span>退化成本</span><strong>{{ formatCurrency(degradationRecommended.degradation_cost_eur) }}</strong></div>
+                <div><span>SOH</span><strong>{{ formatPercent(degradationRecommended.soh_start) }} -> {{ formatPercent(degradationRecommended.soh_end) }}</strong></div>
+                <div><span>等效满循环</span><strong>{{ formatNumber(degradationRecommended.equivalent_full_cycles, 1) }}</strong></div>
+                <div><span>容量衰减</span><strong>{{ formatNumber(degradationRecommended.capacity_fade_percent, 2) }}%</strong></div>
+              </div>
+            </div>
+          </ChartCard>
+        </div>
+
+        <ChartCard title="Rawhide 配置敏感性 Pareto — Stage15 Scan">
+          <div class="pareto-summary">
+            <span>推荐配置</span>
+            <strong>{{ bestPareto.config_id || 'cap1p5_pow1p5_obj1' }}</strong>
+            <p>{{ formatKwh(bestPareto.capacity_kwh) }} 容量，{{ formatKw(bestPareto.max_discharge_kw) }} 充放电功率，增量收益 {{ formatCurrency(bestPareto.incremental_revenue_eur) }}。</p>
+          </div>
+          <el-table class="pareto-table" :data="paretoRows" size="small">
+            <el-table-column prop="config_id" label="配置" min-width="170" />
+            <el-table-column label="容量" min-width="90"><template #default="{ row }">{{ formatKwh(row.capacity_kwh) }}</template></el-table-column>
+            <el-table-column label="功率" min-width="90"><template #default="{ row }">{{ formatKw(row.max_discharge_kw) }}</template></el-table-column>
+            <el-table-column label="增量收益" min-width="110"><template #default="{ row }"><span :class="Number(row.incremental_revenue_eur) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(row.incremental_revenue_eur) }}</span></template></el-table-column>
+            <el-table-column label="循环" min-width="80"><template #default="{ row }">{{ formatNumber(row.cycle_equivalent_count, 1) }}</template></el-table-column>
+            <el-table-column label="Pareto" min-width="80"><template #default="{ row }">{{ isTrue(row.pareto_front) ? 'Yes' : '-' }}</template></el-table-column>
+          </el-table>
+        </ChartCard>
+      </section>
+
+      <PageState
+        v-else
+        type="empty"
+        title="暂无 Rawhide 仿真数据"
+        message="未读取到 S18 Rawhide 报告或指标文件；下方仍展示原型容量策略治理结果。"
+      />
+
+      <div v-if="scorecard.length" class="section-title">
+        <span>Stage13 Prototype Governance</span>
+        <h3>原型容量策略治理对照</h3>
       </div>
-      <div class="glass-card chart-card animate-fade-in-up animate-delay-4">
-        <h3>三维评分雷达 — Governance Radar</h3>
-        <v-chart class="chart" :option="radarOption" theme="dark-tech" autoresize />
+      <div v-if="scorecard.length" class="strategy-row">
+        <div v-for="(strategy, index) in scorecard" :key="strategy.scenario_id" class="strategy-card glass-card" :class="decisionClass(strategy.governance_decision)">
+          <div class="sc-header">
+            <span class="sc-decision" :class="decisionClass(strategy.governance_decision)">{{ strategy.governance_decision }}</span>
+            <span class="sc-score display-number">{{ formatNumber(strategy.governance_score, 1) }}</span>
+          </div>
+          <h4>{{ strategy.scenario_id }}</h4>
+          <p class="sc-type">{{ strategy.strategy_type }}</p>
+          <div class="sc-metrics">
+            <div><span>收益 Revenue</span><strong>{{ formatCurrency(strategy.total_storage_revenue_eur) }}</strong></div>
+            <div><span>增量 Incr.</span><strong :class="Number(strategy.incremental_revenue_eur) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(strategy.incremental_revenue_eur) }}</strong></div>
+            <div><span>循环 Cycles</span><strong>{{ formatNumber(strategy.cycle_equivalent_count, 1) }}</strong></div>
+            <div><span>平均 SOC</span><strong>{{ formatPercent(strategy.mean_soc) }}</strong></div>
+          </div>
+          <p class="sc-reason">{{ strategy.decision_reason }}</p>
+        </div>
       </div>
-    </div>
+
+      <div v-if="scorecard.length" class="chart-row">
+        <ChartCard title="策略评分对比 — Strategy Scores">
+          <v-chart class="chart" :option="scoreBarOption" theme="dark-tech" autoresize />
+        </ChartCard>
+        <ChartCard title="三维评分雷达 — Governance Radar">
+          <v-chart class="chart" :option="radarOption" theme="dark-tech" autoresize />
+        </ChartCard>
+      </div>
     </template>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, RadarChart } from 'echarts/charts'
-import { TitleComponent, TooltipComponent, LegendComponent, GridComponent, RadarComponent } from 'echarts/components'
+import { GridComponent, LegendComponent, RadarComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import api from '../utils/api'
+import ChartCard from '../components/ChartCard.vue'
 import PageState from '../components/PageState.vue'
+import { buildGovernanceRadarOption, buildRawhideRevenueOption, buildScoreBarOption } from '../charts/dispatchCharts'
+import {
+  fetchGovernanceScorecard,
+  fetchRawhideDegradationMetrics,
+  fetchRawhideDispatchMetrics,
+  fetchRawhideReport,
+  fetchRawhideSensitivityMetrics,
+} from '../services/dispatchService'
 import { normalizeApiError } from '../utils/api'
 
 use([CanvasRenderer, BarChart, RadarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, RadarComponent])
 
 const scorecard = ref([])
+const rawhideReport = ref(null)
+const rawhideDispatchMetrics = ref([])
+const rawhideSensitivityMetrics = ref([])
+const rawhideDegradationMetrics = ref([])
 const loading = ref(false)
 const error = ref(null)
 
-function decisionClass(d) {
+const scoreBarOption = computed(() => buildScoreBarOption(scorecard.value))
+const radarOption = computed(() => buildGovernanceRadarOption(scorecard.value))
+const rawhideRevenueOption = computed(() => buildRawhideRevenueOption(rawhideDispatchMetrics.value))
+const rawhideAvailable = computed(() => Boolean(rawhideReport.value && rawhideDispatchMetrics.value.length))
+const referenceSite = computed(() => rawhideReport.value?.reference_site || {})
+const rawhideScaling = computed(() => rawhideReport.value?.scaling || {})
+const bestPareto = computed(() => rawhideReport.value?.recommended_pareto_config || paretoRows.value[0] || {})
+const degradationRecommended = computed(() => rawhideReport.value?.degradation_recommended_metrics || rawhideDegradationMetrics.value.find(item => item.scenario === 'rolling_with_rainflow_degradation') || {})
+const rollingMetric = computed(() => rawhideDispatchMetrics.value.find(item => item.scenario === 'rolling_optimization') || {})
+const stage11Metric = computed(() => rawhideDispatchMetrics.value.find(item => item.scenario === 'stage11_best_threshold_q40_q95') || {})
+const stage10Metric = computed(() => rawhideDispatchMetrics.value.find(item => item.scenario === 'stage10_fixed_threshold') || {})
+const paretoRows = computed(() => rawhideSensitivityMetrics.value.filter(item => isTrue(item.pareto_front)).slice(0, 6))
+const rawhideKpis = computed(() => [
+  { label: 'Rolling 增量收益', value: formatCurrency(rollingMetric.value.incremental_revenue_eur), hint: 'Stage12 rolling optimization', className: Number(rollingMetric.value.incremental_revenue_eur || 0) >= 0 ? 'positive' : 'negative' },
+  { label: 'Stage11 离线上界', value: formatCurrency(stage11Metric.value.incremental_revenue_eur), hint: 'best threshold q40/q95', className: 'positive' },
+  { label: 'Stage10 固定阈值', value: formatCurrency(stage10Metric.value.incremental_revenue_eur), hint: 'failure baseline', className: Number(stage10Metric.value.incremental_revenue_eur || 0) >= 0 ? 'positive' : 'negative' },
+  { label: '退化后净增量', value: formatCurrency(degradationRecommended.value.net_incremental_revenue_eur), hint: 'rainflow degradation replay', className: Number(degradationRecommended.value.net_incremental_revenue_eur || 0) >= 0 ? 'positive' : 'negative' },
+  { label: 'SOH 变化', value: `${formatPercent(degradationRecommended.value.soh_start)} -> ${formatPercent(degradationRecommended.value.soh_end)}`, hint: 'cycle + calendar degradation', className: 'neutral' },
+  { label: '推荐 Pareto', value: `${formatKwh(bestPareto.value.capacity_kwh)} / ${formatKw(bestPareto.value.max_discharge_kw)}`, hint: bestPareto.value.config_id || 'configuration scan', className: 'neutral' },
+])
+
+function decisionClass(decision) {
   const map = { reject: 'decision-reject', pilot_candidate: 'decision-pilot', baseline: 'decision-baseline', analysis_upper_bound: 'decision-upper' }
-  return map[d] || ''
+  return map[decision] || ''
 }
-
-const scoreBarOption = computed(() => {
-  if (!scorecard.value.length) return {}
-  const items = scorecard.value
-  return {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['Economic', 'Constraint', 'Risk'], top: 0 },
-    grid: { left: 140, right: 30, top: 40, bottom: 20 },
-    xAxis: { type: 'value', max: 100 },
-    yAxis: { type: 'category', data: items.map(s => s.scenario_id), axisLabel: { fontSize: 10 } },
-    series: [
-      { name: 'Economic', type: 'bar', stack: 'score', data: items.map(s => (Number(s.economic_score) / 3).toFixed(1)), itemStyle: { color: '#00d4ff' } },
-      { name: 'Constraint', type: 'bar', stack: 'score', data: items.map(s => (Number(s.constraint_score) / 3).toFixed(1)), itemStyle: { color: '#00f5a0' } },
-      { name: 'Risk', type: 'bar', stack: 'score', data: items.map(s => (Number(s.risk_score) / 3).toFixed(1)), itemStyle: { color: '#ffa726' } },
-    ],
+function isTrue(value) {
+  return value === true || value === 'True' || value === 'true' || value === 1 || value === '1'
+}
+function toNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+function formatNumber(value, digits = 2) {
+  const n = toNumber(value)
+  return n === null ? 'N/A' : n.toLocaleString('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits })
+}
+function formatCurrency(value) {
+  const n = toNumber(value)
+  return n === null ? 'N/A' : `€${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+}
+function formatPercent(value) {
+  const n = toNumber(value)
+  return n === null ? 'N/A' : `${(n * 100).toFixed(1)}%`
+}
+function formatKw(value) {
+  const n = toNumber(value)
+  if (n === null) return 'N/A'
+  return n >= 1000 ? `${(n / 1000).toFixed(1)} MW` : `${n.toFixed(0)} kW`
+}
+function formatMw(value) {
+  const n = toNumber(value)
+  return n === null ? 'N/A' : `${(n / 1000).toFixed(1)} MW_AC`
+}
+function formatKwh(value) {
+  const n = toNumber(value)
+  if (n === null) return 'N/A'
+  return n >= 1000 ? `${(n / 1000).toFixed(1)} MWh` : `${n.toFixed(0)} kWh`
+}
+async function optionalRequest(request) {
+  try {
+    return await request()
+  } catch {
+    return null
   }
-})
-
-const radarOption = computed(() => {
-  if (!scorecard.value.length) return {}
-  const items = scorecard.value
-  const indicator = [{ name: 'Economic', max: 100 }, { name: 'Constraint', max: 100 }, { name: 'Risk', max: 100 }]
-  const colors = ['#00d4ff', '#00f5a0', '#ffa726', '#ff5252']
-  return {
-    legend: { data: items.map(s => s.scenario_id), top: 0, textStyle: { fontSize: 10 } },
-    radar: { indicator, center: ['50%', '55%'], radius: '55%' },
-    series: [{ type: 'radar', data: items.map((s, i) => ({
-      name: s.scenario_id,
-      value: [Number(s.economic_score), Number(s.constraint_score), Number(s.risk_score)],
-      lineStyle: { color: colors[i] },
-      itemStyle: { color: colors[i] },
-      areaStyle: { color: colors[i], opacity: 0.12 },
-    })) }],
-  }
-})
-
+}
 async function loadScorecard() {
   loading.value = true
   error.value = null
   try {
-    const res = await api.get('/api/governance/scorecard')
-    scorecard.value = res.data
+    const [scorecardData, reportData, dispatchData, sensitivityData, degradationData] = await Promise.all([
+      optionalRequest(fetchGovernanceScorecard),
+      optionalRequest(fetchRawhideReport),
+      optionalRequest(fetchRawhideDispatchMetrics),
+      optionalRequest(fetchRawhideSensitivityMetrics),
+      optionalRequest(fetchRawhideDegradationMetrics),
+    ])
+    scorecard.value = scorecardData || []
+    rawhideReport.value = reportData
+    rawhideDispatchMetrics.value = dispatchData || []
+    rawhideSensitivityMetrics.value = sensitivityData || []
+    rawhideDegradationMetrics.value = degradationData || []
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
   } finally {
@@ -131,51 +252,75 @@ onMounted(loadScorecard)
 </script>
 
 <style scoped>
-.dispatch { display: flex; flex-direction: column; gap: var(--space-xl); }
-
-.strategy-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-lg); }
-.strategy-card { padding: var(--space-lg); position: relative; overflow: hidden; }
-.strategy-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-  background: var(--text-tertiary);
-}
-.strategy-card.decision-upper::before { background: var(--accent-green); }
-.strategy-card.decision-pilot::before { background: var(--accent-cyan); }
-.strategy-card.decision-baseline::before { background: var(--accent-orange); }
-.strategy-card.decision-reject::before { background: var(--accent-red); }
-
-.sc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.sc-decision { font-size: 11px; padding: 2px 10px; border-radius: var(--radius-full); font-weight: 600; text-transform: uppercase; }
-.sc-decision.decision-upper { background: rgba(0,245,160,0.12); color: var(--accent-green); }
-.sc-decision.decision-pilot { background: rgba(0,212,255,0.12); color: var(--accent-cyan); }
-.sc-decision.decision-baseline { background: rgba(255,167,38,0.12); color: var(--accent-orange); }
-.sc-decision.decision-reject { background: rgba(255,82,82,0.12); color: var(--accent-red); }
-.sc-score { font-size: 24px; }
-
-.sc-name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
-.sc-type { font-size: 11px; color: var(--text-tertiary); margin-bottom: 12px; }
-.sc-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-.sc-metric { display: flex; flex-direction: column; }
-.sc-ml { font-size: 10px; color: var(--text-tertiary); }
-.sc-mv { font-size: 14px; }
-.sc-mv.positive { color: var(--accent-green); }
-.sc-mv.negative { color: var(--accent-red); }
-.sc-reason { font-size: 11px; color: var(--text-secondary); line-height: 1.5; border-top: 1px solid var(--border-glass); padding-top: 10px; }
-
+.dispatch { display: flex; flex-direction: column; gap: var(--space-lg); }
+.rawhide-section { display: flex; flex-direction: column; gap: var(--space-lg); }
+.rawhide-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 0.7fr); gap: var(--space-lg); padding: var(--space-xl); }
+.kicker,
+.section-title span,
+.pareto-summary span { color: var(--accent-cyan); display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.08em; margin-bottom: 6px; text-transform: uppercase; }
+.rawhide-hero h2 { color: var(--text-primary); font-size: 26px; line-height: 1.2; margin-bottom: 8px; }
+.rawhide-hero p,
+.chart-note,
+.boundary-panel p,
+.degradation-main p,
+.pareto-summary p { color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
+.rawhide-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.rawhide-facts div,
+.degradation-list div { background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-sm); padding: 12px; }
+.rawhide-facts span,
+.rawhide-metric span,
+.degradation-main span,
+.degradation-list span { color: var(--text-secondary); display: block; font-size: 11px; margin-bottom: 4px; }
+.rawhide-facts strong,
+.degradation-list strong { color: var(--text-primary); display: block; font-size: 15px; overflow-wrap: anywhere; }
+.boundary-panel { border-color: rgba(255, 167, 38, 0.28); padding: var(--space-md) var(--space-lg); }
+.boundary-panel strong { color: var(--accent-orange); display: block; font-size: 13px; margin-bottom: 4px; }
+.rawhide-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-lg); }
+.rawhide-metric { padding: var(--space-lg); }
+.rawhide-metric strong { display: block; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+.rawhide-metric small { color: var(--text-tertiary); display: block; font-size: 11px; margin-top: 8px; }
+.positive { color: var(--accent-green) !important; }
+.negative { color: var(--accent-red) !important; }
+.neutral { color: var(--text-primary) !important; }
 .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
-.chart-card { padding: var(--space-lg); }
-.chart-card h3 { font-size: 14px; font-weight: 600; margin-bottom: var(--space-md); }
-.chart { height: 340px; width: 100%; }
+.chart { height: 320px; width: 100%; }
+.degradation-panel { display: grid; gap: var(--space-md); }
+.degradation-main { border-bottom: 1px solid var(--border-glass); padding-bottom: var(--space-md); }
+.degradation-main strong { display: block; font-size: 28px; line-height: 1.2; margin: 2px 0 6px; }
+.degradation-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.pareto-summary { border-bottom: 1px solid var(--border-glass); margin-bottom: var(--space-md); padding-bottom: var(--space-md); }
+.pareto-summary strong { color: var(--text-primary); display: block; font-size: 16px; margin-bottom: 4px; }
+.section-title { margin-top: var(--space-sm); }
+.section-title h3 { color: var(--text-primary); font-size: 18px; font-weight: 700; }
+.strategy-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-lg); }
+.strategy-card { border-top: 3px solid var(--text-tertiary); padding: var(--space-lg); }
+.strategy-card.decision-upper { border-top-color: var(--accent-green); }
+.strategy-card.decision-pilot { border-top-color: var(--accent-cyan); }
+.strategy-card.decision-baseline { border-top-color: var(--accent-orange); }
+.strategy-card.decision-reject { border-top-color: var(--accent-red); }
+.sc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.sc-decision { border-radius: var(--radius-full); background: rgba(255,255,255,0.08); color: var(--text-secondary); font-size: 11px; font-weight: 700; padding: 2px 10px; text-transform: uppercase; }
+.sc-score { font-size: 24px; }
+.strategy-card h4 { color: var(--text-primary); font-size: 13px; margin-bottom: 2px; }
+.sc-type { color: var(--text-tertiary); font-size: 11px; margin-bottom: 12px; }
+.sc-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.sc-metrics div { display: flex; flex-direction: column; }
+.sc-metrics span { color: var(--text-tertiary); font-size: 10px; }
+.sc-metrics strong { color: var(--text-primary); font-size: 14px; }
+.sc-reason { border-top: 1px solid var(--border-glass); color: var(--text-secondary); font-size: 11px; line-height: 1.5; padding-top: 10px; }
 
 @media (max-width: 1199px) {
+  .rawhide-hero,
   .chart-row { grid-template-columns: 1fr; }
-  .strategy-card, .chart-card { min-width: 0; }
 }
 
 @media (max-width: 767px) {
-  .dispatch { gap: var(--space-lg); }
-  .strategy-row { grid-template-columns: 1fr; }
+  .rawhide-hero,
+  .boundary-panel,
+  .rawhide-metric { padding: var(--space-md); }
+  .rawhide-facts,
+  .degradation-list,
   .sc-metrics { grid-template-columns: 1fr; }
-  .chart { height: 320px; }
+  .chart { height: 300px; }
 }
 </style>

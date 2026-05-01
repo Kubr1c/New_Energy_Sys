@@ -1,3 +1,15 @@
+"""表格模型横向对比模块。
+
+模块设计原则：
+- 对 Stage 3 特征数据集同时训练多种表格模型（LightGBM / XGBoost / CatBoost / RandomForest 等）
+- 统一评估指标，输出推荐模型及对比报告
+- 产物为 processed_dir 下的指标 CSV / 预测 CSV / JSON / Markdown
+
+本模块对应项目 Stage 8 的表格模型横向对比功能。
+
+入口命令: new-energy-sys compare-tabular-models --config <path> --input <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -13,16 +25,16 @@ from new_energy_sys.tabular_comparison import (
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse Stage8 tabular-comparison CLI arguments."""
+    """解析 Stage 8 表格模型对比命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage8 tabular model comparison.")
-    parser.add_argument("--config", required=True, help="Path to JSON data-source configuration.")
-    parser.add_argument("--input", required=True, help="Stage3 feature dataset path relative to project root.")
+    parser = argparse.ArgumentParser(description="执行 Stage 8 表格模型横向对比。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
+    parser.add_argument("--input", required=True, help="Stage 3 特征数据集路径（相对于项目根目录）。")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Train Stage8 tabular models and persist comparison artifacts."""
+    """训练 Stage 8 表格模型并落盘对比产物。"""
 
     args = parse_args()
     runtime = load_config(args.config)

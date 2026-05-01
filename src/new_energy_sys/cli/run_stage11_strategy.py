@@ -1,3 +1,15 @@
+"""储能策略敏感性分析模块。
+
+模块设计原则：
+- 基于 Stage 9 预测与 Stage 3 市场信号，对充放电价格阈值执行网格搜索
+- 输出策略敏感性结果、指标及报告
+- 分位数阈值严格校验，避免错误搜索空间生成不可解释报告
+
+本模块对应项目 Stage 11 的储能策略敏感性分析功能。
+
+入口命令: new-energy-sys run-stage11 --config <path> --predictions <path> --feature-input <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -16,38 +28,38 @@ from new_energy_sys.stage11_storage_strategy import (
 def parse_args() -> argparse.Namespace:
     """解析 Stage11 储能策略敏感性分析命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage11 storage strategy sensitivity analysis.")
-    parser.add_argument("--config", required=True, help="Path to JSON data-source configuration.")
+    parser = argparse.ArgumentParser(description="执行 Stage 11 储能策略敏感性分析。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     parser.add_argument(
         "--predictions",
         required=True,
-        help="Stage9 prediction CSV path relative to project root.",
+        help="Stage 9 预测 CSV 路径（相对于项目根目录）。",
     )
     parser.add_argument(
         "--feature-input",
         required=True,
-        help="Stage3 feature parquet path relative to project root; used for price/load alignment.",
+        help="Stage 3 特征 parquet 路径（相对于项目根目录），用于价格/负荷对齐。",
     )
     parser.add_argument(
         "--horizon-hours",
         type=int,
         default=24,
-        help="Forecast horizon used to convert forecast timestamp into dispatch timestamp.",
+        help="预测时距，用于将预测时间戳转换为调度时间戳。",
     )
     parser.add_argument(
         "--charge-quantiles",
         default="0.05,0.10,0.20,0.30,0.40",
-        help="Comma-separated price quantiles used as charge thresholds.",
+        help="逗号分隔的充电价格分位数阈值。",
     )
     parser.add_argument(
         "--discharge-quantiles",
         default="0.60,0.70,0.80,0.90,0.95",
-        help="Comma-separated price quantiles used as discharge thresholds.",
+        help="逗号分隔的放电价格分位数阈值。",
     )
     parser.add_argument(
         "--output-prefix",
         default="stage11_storage_strategy_sensitivity",
-        help="Output filename prefix written under processed_dir.",
+        help="输出文件名前缀（写入 processed_dir）。",
     )
     return parser.parse_args()
 

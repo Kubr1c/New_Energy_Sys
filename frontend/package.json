@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "vite --configLoader native",
+    "build": "vite build --configLoader native && node scripts/check-build-artifacts.mjs",
+    "preview": "vite preview --configLoader native",
     "lint": "node scripts/static-check.mjs",
     "test:e2e": "playwright test",
     "test": "node scripts/static-check.mjs",

@@ -1,3 +1,14 @@
+"""储能策略治理与展示层模块。
+
+模块设计原则：
+- 不重新仿真，不重新优化参数，只消费 Stage10/11/12 的已审计产物
+- 统一评分体系：收益分、物理约束分、运行风险分加权合成治理分
+- 治理决策分为 reject/baseline/analysis_upper_bound/pilot_candidate/watch 五级
+- 产物包括评分表 CSV、JSON 报告、Markdown 报告和静态 HTML 仪表盘
+
+本模块对应项目 Stage 13 的储能策略治理汇总功能。
+"""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +25,10 @@ from new_energy_sys.stage11_storage_strategy import _json_safe
 class Stage13GovernanceResult:
     """Stage13 储能策略治理层产物容器。
 
-    scorecard 是管理层可直接读取的策略评分表，report 保存结构化治理结论。
+    Args:
+        scorecard: 管理层可直接读取的策略评分表 DataFrame。
+        report: 结构化治理结论字典。
+
     Markdown 和 HTML 由专用写出函数生成，避免后续系统只能解析自然语言报告。
     """
 
@@ -56,6 +70,17 @@ def _read_metrics(path: Path, *, stage: str) -> pd.DataFrame:
 
     CSV 来自多个阶段，部分列在 Stage10 和 Stage11 中并不完全一致。这里只强制
     校验治理层必须依赖的公共列，缺少核心列时直接失败，避免生成伪完整报告。
+
+    Args:
+        path: 指标 CSV 文件路径。
+        stage: 阶段标识字符串。
+
+    Returns:
+        类型校验后的 DataFrame，附带 source_stage 和 source_path 列。
+
+    Raises:
+        FileNotFoundError: 文件不存在时抛出。
+        ValueError: 缺少核心列时抛出。
     """
 
     if not path.exists():
@@ -79,7 +104,17 @@ def _read_metrics(path: Path, *, stage: str) -> pd.DataFrame:
 
 
 def _to_bool(value: Any) -> bool:
-    """把 CSV 中的布尔字符串转换为 bool。"""
+    """把 CSV 中的布尔字符串转换为 bool。
+
+    Args:
+        value: 需要转换的值。
+
+    Returns:
+        Python bool。
+
+    Raises:
+        ValueError: 无法解析为布尔值时抛出。
+    """
 
     if isinstance(value, bool):
         return value
@@ -93,7 +128,20 @@ def _to_bool(value: Any) -> bool:
 
 
 def _first_row(frame: pd.DataFrame, *, column: str, value: str, source: str) -> pd.Series:
-    """按场景或策略 ID 选择唯一治理输入行。"""
+    """按场景或策略 ID 选择唯一治理输入行。
+
+    Args:
+        frame: 指标 DataFrame。
+        column: 筛选列名。
+        value: 筛选目标值。
+        source: 来源阶段标识，用于错误信息。
+
+    Returns:
+        匹配的首行 Series。
+
+    Raises:
+        ValueError: 无匹配行时抛出。
+    """
 
     rows = frame.loc[frame[column] == value]
     if rows.empty:
@@ -106,6 +154,12 @@ def _all_constraints_pass(row: pd.Series) -> bool:
 
     只要存在任一约束列且值为 False，治理层就必须把该策略判为不可用。
     缺失的约束列不自动视为通过；当前阶段产物都包含这些列，因此缺失会被视为风险。
+
+    Args:
+        row: 策略指标行 Series。
+
+    Returns:
+        所有约束是否全部通过。
     """
 
     values = []
@@ -124,6 +178,14 @@ def _score_strategy(row: pd.Series, *, max_incremental_revenue: float) -> dict[s
     - 收益分：按本轮候选最大增量收益归一化。
     - 物理分：SOC、功率、同时充放电、能量守恒全部通过才给满分。
     - 运行风险扣分：循环次数、短缺、电池长期贴边会降低治理评分。
+
+    Args:
+        row: 策略指标行 Series。
+        max_incremental_revenue: 本轮候选最大增量收益，用于收益分归一化。
+
+    Returns:
+        包含 economic_score、constraint_score、risk_score、governance_score、
+        risk_flags、constraint_passed 的字典。
     """
 
     incremental = float(row["incremental_revenue_eur"])
@@ -172,6 +234,13 @@ def _safe_float(value: Any, *, default: float) -> float:
 
     Stage10 的历史产物没有等效循环列，和 Stage11/12 合并后 pandas 会产生 NaN。
     治理层不能把 NaN 写入展示产物，因此这里把缺失值转成业务可解释的 0 或默认 SOC。
+
+    Args:
+        value: 需要转换的值。
+        default: 缺省时的默认值。
+
+    Returns:
+        转换后的 float。
     """
 
     if value is None or pd.isna(value):
@@ -180,7 +249,14 @@ def _safe_float(value: Any, *, default: float) -> float:
 
 
 def _decision(row: pd.Series) -> tuple[str, str]:
-    """生成治理决策和原因。"""
+    """生成治理决策和原因。
+
+    Args:
+        row: 含治理评分和风险标签的策略行 Series。
+
+    Returns:
+        (决策字符串, 原因字符串) 元组。
+    """
 
     scenario = str(row["scenario_id"])
     flags = set(str(row["risk_flags"]).split(",")) if str(row["risk_flags"]) != "none" else set()
@@ -205,6 +281,14 @@ def _selected_rows(stage10: pd.DataFrame, stage11: pd.DataFrame, stage12: pd.Dat
     Stage10 用固定阈值 forecast_dispatch；Stage11 用最优 q40_q95；Stage12 用
     rolling_optimization 和 no_storage。这样可以保证同一张表覆盖失败基线、离线
     上界、滚动候选和无储能基准。
+
+    Args:
+        stage10: Stage10 指标 DataFrame。
+        stage11: Stage11 指标 DataFrame。
+        stage12: Stage12 指标 DataFrame。
+
+    Returns:
+        包含四行核心策略的 DataFrame。
     """
 
     fixed = _first_row(stage10, column="scenario", value="forecast_dispatch", source="Stage10").copy()
@@ -241,6 +325,15 @@ def run_stage13_storage_governance(
 
     Stage13 不重新仿真，也不重新优化参数；它只消费 Stage10/11/12 的已审计产物，
     给出管理视角下的策略取舍、风险标签和下一阶段路线。
+
+    Args:
+        stage10_metrics_path: Stage10 指标 CSV 路径。
+        stage11_metrics_path: Stage11 指标 CSV 路径。
+        stage12_metrics_path: Stage12 指标 CSV 路径。
+        output_paths: 输出产物路径字典。
+
+    Returns:
+        Stage13GovernanceResult 实例。
     """
 
     stage10 = _read_metrics(stage10_metrics_path, stage="stage10")
@@ -248,7 +341,7 @@ def run_stage13_storage_governance(
     stage12 = _read_metrics(stage12_metrics_path, stage="stage12")
     selected = _selected_rows(stage10, stage11, stage12).reset_index(drop=True)
     # 不同阶段指标列不完全一致。治理层只允许输出显式数值，避免 CSV 和 HTML
-    # 出现 NaN 后被误读为算法异常。
+    # 出现 NaN 后被误读为算法异常
     fill_defaults = {
         "cycle_equivalent_count": 0.0,
         "total_curtailed_kwh": 0.0,
@@ -350,13 +443,24 @@ def run_stage13_storage_governance(
 
 
 def write_stage13_json(report: dict[str, Any], path: Path) -> None:
-    """写出严格 JSON 治理报告。"""
+    """写出严格 JSON 治理报告。
+
+    Args:
+        report: 治理报告字典。
+        path: JSON 输出路径。
+    """
 
     path.write_text(json.dumps(_json_safe(report), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
 
 
 def write_stage13_report(report: dict[str, Any], scorecard: pd.DataFrame, path: Path) -> None:
-    """写出 Stage13 中文管理报告。"""
+    """写出 Stage13 中文管理报告。
+
+    Args:
+        report: 治理报告字典。
+        scorecard: 策略评分表 DataFrame。
+        path: 报告输出路径。
+    """
 
     lines = [
         "# Stage13 储能策略治理与展示层报告",
@@ -444,6 +548,11 @@ def write_stage13_dashboard(report: dict[str, Any], scorecard: pd.DataFrame, pat
 
     该文件只使用内联 CSS 和表格，适合作为阶段展示层产物；所有数据仍以 CSV/JSON
     为准，HTML 不作为机器消费接口。
+
+    Args:
+        report: 治理报告字典。
+        scorecard: 策略评分表 DataFrame。
+        path: HTML 输出路径。
     """
 
     max_revenue = max(float(scorecard["incremental_revenue_eur"].max()), 1e-9)

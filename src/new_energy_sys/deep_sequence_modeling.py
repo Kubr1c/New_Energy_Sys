@@ -1,3 +1,15 @@
+"""深度序列建模模块。
+
+模块设计原则：
+- 以 Persistence 作为最简单预测基线，LightGBM 作为稳定工程基线，TCN/CNN-LSTM/Attention-LSTM 作为深度学习对比
+- 所有序列模型均使用验证集早停和梯度裁剪，防止训练不稳定
+- history_only 特征组严格排除 target_plus_* 列，保证生产安全性
+- weather_history_target_aligned 特征组仅用于离线上限实验，不可等同于真实预报上线效果
+- 模型选择规则明确：深度模型需在 nRMSE 上达到实质性改善且日间指标不退化方可替代 LightGBM
+
+本模块对应项目 Stage 14B 的多模型深度学习预测对比功能。
+"""
+
 from __future__ import annotations
 
 import os
@@ -25,7 +37,10 @@ SUPPORTED_MODELS = {"persistence", *NEURAL_MODELS}
 
 @dataclass(frozen=True)
 class DeepSequenceResult:
-    """Artifacts produced by Stage14B multi-model forecasting experiments."""
+    """Stage14B 多模型预测实验的输出产物。
+
+    包含评估指标、预测结果和实验报告。
+    """
 
     metrics: pd.DataFrame
     predictions: pd.DataFrame
@@ -33,12 +48,14 @@ class DeepSequenceResult:
 
 
 class CnnLstmRegressor(nn.Module):
-    """CNN-LSTM regressor for single-site hourly PV power forecasting.
+    """CNN-LSTM 回归器，用于单站点小时级光伏功率预测。
 
-    Conv1d layers extract short local fluctuation patterns inside the rolling
-    window, then the LSTM models longer temporal dependence. This keeps the
-    model compact enough for CPU training while still being a genuine deep
-    sequence model for the thesis.
+    网络结构设计：
+    - 两层 Conv1d 提取滚动窗口内的短程局部波动模式
+    - Conv1d 使用 same padding 保持时间维度不变
+    - LSTM 在卷积特征上建模更长时间的时序依赖关系
+    - 最后取 LSTM 最后时间步输出送入线性头，映射为标量功率预测值
+    - 整体保持模型足够紧凑，可在 CPU 上训练，同时构成论文中真正的深度序列模型
     """
 
     def __init__(
@@ -72,19 +89,22 @@ class CnnLstmRegressor(nn.Module):
         self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(lstm_hidden_size, 1))
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
-        # DataLoader gives [batch, window, features]. Conv1d expects
-        # [batch, features, window], then LSTM consumes [batch, window, channels].
+        # DataLoader 输出 [batch, window, features]，Conv1d 需要
+        # [batch, features, window]，LSTM 再消费 [batch, window, channels]。
         encoded = self.cnn(values.transpose(1, 2)).transpose(1, 2)
         output, _ = self.lstm(encoded)
         return self.head(output[:, -1, :]).squeeze(-1)
 
 
 class AttentionLstmRegressor(nn.Module):
-    """Attention-LSTM regressor for hourly PV power forecasting.
+    """Attention-LSTM 回归器，用于小时级光伏功率预测。
 
-    The LSTM encodes the full historical window. A small additive attention
-    block learns which historical hours matter most for the t+24h prediction,
-    giving the thesis a clear deep-learning variant beyond CNN-LSTM.
+    网络结构设计：
+    - LSTM 编码完整历史窗口的时序特征
+    - 加性注意力（Additive Attention）块学习窗口中哪些历史时刻对
+      t+24h 预测最重要，为论文提供 CNN-LSTM 之外的深度学习变体
+    - 注意力权重经 softmax 归一化后对 LSTM 输出加权求和，得到上下文向量
+    - 上下文向量送入线性头映射为标量功率预测值
     """
 
     def __init__(
@@ -113,8 +133,7 @@ class AttentionLstmRegressor(nn.Module):
         self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(lstm_hidden_size, 1))
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
-        # Attention scores are normalized over the window dimension. The context
-        # vector is therefore a weighted summary of important historical hours.
+        # 注意力分数在窗口维度上归一化，上下文向量是重要历史时刻的加权和。
         output, _ = self.lstm(values)
         weights = torch.softmax(self.attention(output), dim=1)
         context = torch.sum(output * weights, dim=1)
@@ -122,18 +141,17 @@ class AttentionLstmRegressor(nn.Module):
 
 
 def _numeric_feature_columns(frame: pd.DataFrame) -> list[str]:
-    """Return numeric columns that can safely be considered model features."""
+    """返回可安全用作模型特征的数值列。"""
 
     excluded = {"timestamp", *TARGET_COLUMNS}
     return [column for column in frame.select_dtypes(include=[np.number]).columns if column not in excluded]
 
 
 def _history_only_features(frame: pd.DataFrame) -> list[str]:
-    """Resolve the production-safe history-only feature group.
+    """解析生产安全的 history_only 特征组。
 
-    This mirrors the Stage8 primary group: deterministic time encodings plus
-    measured PV history. It deliberately rejects `target_plus_*` columns because
-    those columns are not production-safe weather forecast-cycle inputs.
+    该特征组镜像 Stage8 主特征组：确定性时间编码加上实测光伏历史。
+    故意排除 target_plus_* 列，因为这些列不是生产安全的天气预报周期输入。
     """
 
     numeric = _numeric_feature_columns(frame)
@@ -181,7 +199,7 @@ def _history_only_features(frame: pd.DataFrame) -> list[str]:
 
 
 def _weather_history_target_aligned_features(frame: pd.DataFrame) -> list[str]:
-    """Resolve the offline upper-bound feature group for sequence models."""
+    """解析序列模型离线上限特征组。"""
 
     numeric = _numeric_feature_columns(frame)
     weather_markers = [
@@ -218,7 +236,7 @@ def _weather_history_target_aligned_features(frame: pd.DataFrame) -> list[str]:
 
 
 def _resolve_feature_sets(frame: pd.DataFrame, names: list[str] | None) -> dict[str, list[str]]:
-    """Resolve public feature-set names to concrete Stage3 columns."""
+    """将公开特征集名称解析为 Stage3 中的具体列。"""
 
     requested = names or ["history_only", "weather_history_target_aligned"]
     resolvers = {
@@ -236,7 +254,7 @@ def _resolve_feature_sets(frame: pd.DataFrame, names: list[str] | None) -> dict[
 
 
 def _resolve_targets(targets: list[str] | None) -> list[str]:
-    """Resolve CLI target aliases while keeping a strict target allow-list."""
+    """解析 CLI 目标别名，同时严格校验目标允许列表。"""
 
     aliases = {
         "1h": "target_pv_power_t_plus_1h",
@@ -255,7 +273,7 @@ def _resolve_targets(targets: list[str] | None) -> list[str]:
 
 
 def _resolve_models(models: list[str] | None) -> list[str]:
-    """Resolve and validate public Stage14B model names."""
+    """解析并校验公开 Stage14B 模型名称。"""
 
     requested = models or ["persistence", "cnn_lstm", "attention_lstm"]
     normalized = [model.strip().lower() for model in requested if model.strip()]
@@ -269,7 +287,7 @@ def _standardize_splits(
     splits: dict[str, pd.DataFrame],
     features: list[str],
 ) -> tuple[dict[str, pd.DataFrame], dict[str, dict[str, float]]]:
-    """Standardize features using train statistics only."""
+    """仅使用训练集统计量对特征进行标准化，同时返回缩放参数。"""
 
     train = splits["train"]
     mean = train[features].mean()
@@ -292,7 +310,7 @@ def _make_windows(
     target: str,
     window_size: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Create leakage-safe windows inside one chronological split."""
+    """在单个时间切分内构造无泄漏的滑动窗口。"""
 
     if len(split) < window_size:
         raise ValueError(f"Split has {len(split)} rows, smaller than window_size={window_size}")
@@ -311,7 +329,7 @@ def _make_windows(
 
 
 def _model_config(model_name: str, feature_count: int) -> dict[str, Any]:
-    """Return a serializable model configuration."""
+    """返回可序列化的模型配置字典。"""
 
     if model_name == "cnn_lstm":
         return {
@@ -334,7 +352,7 @@ def _model_config(model_name: str, feature_count: int) -> dict[str, Any]:
 
 
 def _build_neural_model(model_name: str, feature_count: int) -> nn.Module:
-    """Instantiate a supported PyTorch sequence regressor."""
+    """实例化支持的 PyTorch 序列回归模型。"""
 
     config = _model_config(model_name, feature_count)
     if model_name == "cnn_lstm":
@@ -357,7 +375,7 @@ def _train_neural_model(
     patience: int,
     batch_size: int,
 ) -> tuple[nn.Module, dict[str, Any]]:
-    """Train one supported neural sequence model with validation early stopping."""
+    """训练单个神经网络序列模型，使用验证集早停。"""
 
     torch.manual_seed(random_state)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -422,7 +440,7 @@ def _train_neural_model(
 
 
 def _predict(model: nn.Module, values: np.ndarray, *, batch_size: int, capacity_kw: float) -> np.ndarray:
-    """Run clipped neural-model inference in batches."""
+    """批量执行裁剪后的神经网络推理。"""
 
     model.eval()
     predictions: list[np.ndarray] = []
@@ -439,11 +457,10 @@ def _persistence_predictions(
     *,
     capacity_kw: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Build the strict t+24h persistence baseline.
+    """构建严格的 t+24h 持续基线。
 
-    The baseline predicts future PV power with the current measured
-    `pv_power_kw`. It ignores all learned parameters and future weather fields,
-    so it is useful for proving the task is not a trivial copy problem.
+    该基线用当前实测 pv_power_kw 直接预测未来光伏功率，不使用任何学习参数
+    和未来天气字段，用于证明任务不是平凡的复制问题。
     """
 
     if "pv_power_kw" not in split.columns:
@@ -455,7 +472,7 @@ def _persistence_predictions(
 
 
 def _load_lightgbm_reference(baseline_metrics: pd.DataFrame | None) -> dict[str, float | str]:
-    """Resolve the LightGBM history-only reference used by replacement rules."""
+    """解析替代规则所用的 LightGBM history_only 参考指标。"""
 
     fallback = {
         "nrmse_capacity": LIGHTGBM_HISTORY_ONLY_NRMSE,
@@ -481,7 +498,7 @@ def _load_lightgbm_reference(baseline_metrics: pd.DataFrame | None) -> dict[str,
 
 
 def _load_tcn_reference(tcn_metrics: pd.DataFrame | None) -> dict[str, Any] | None:
-    """Return the best Stage6 TCN test row for the 24h target when available."""
+    """当可用时返回 Stage6 TCN 在 24h 目标上的最佳测试行。"""
 
     if tcn_metrics is None or tcn_metrics.empty:
         return None
@@ -510,7 +527,7 @@ def _select_recommendation(
     lightgbm_reference: dict[str, float | str],
     quality_gates: dict[str, bool],
 ) -> dict[str, Any]:
-    """Apply the explicit Stage14B model-selection rule."""
+    """应用 Stage14B 显式模型选择规则。"""
 
     history_test = metrics[
         (metrics["split"] == "test")
@@ -570,7 +587,7 @@ def _append_metric_and_predictions(
     prediction: np.ndarray,
     capacity_kw: float,
 ) -> None:
-    """Append one split's metrics and prediction rows in the shared schema."""
+    """将一个切分的指标和预测行追加到共享结构中。"""
 
     metric_rows.append(
         {
@@ -619,7 +636,7 @@ def run_deep_learning_experiments(
     batch_size: int = 256,
     torch_threads: int | None = None,
 ) -> DeepSequenceResult:
-    """Run Stage14B Persistence/CNN-LSTM/Attention-LSTM experiments."""
+    """运行 Stage14B Persistence/CNN-LSTM/Attention-LSTM 实验。"""
 
     if torch_threads is not None and torch_threads > 0:
         torch.set_num_threads(int(torch_threads))
@@ -849,7 +866,7 @@ def write_deep_learning_report(
     metrics: pd.DataFrame,
     path: Path,
 ) -> None:
-    """Write the Stage14B Chinese Markdown report."""
+    """生成 Stage14B 中文 Markdown 报告。"""
 
     test_rows = metrics[metrics["split"] == "test"].sort_values(
         ["model", "feature_set", "nrmse_capacity", "daytime_nrmse_capacity"]

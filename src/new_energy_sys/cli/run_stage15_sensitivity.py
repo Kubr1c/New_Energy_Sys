@@ -1,3 +1,15 @@
+"""储能配置敏感性分析模块。
+
+模块设计原则：
+- 基于 Stage 9 预测与 Stage 3 市场信号，对储能容量/功率/退化成本等参数执行网格敏感性分析
+- 输出敏感性结果、指标及报告
+- 与 Stage 12 滚动优化共享核心调度器，保证同口径对比
+
+本模块对应项目 Stage 15 的储能配置敏感性分析功能。
+
+入口命令: new-energy-sys run-stage15 --config <path> --predictions <path> --feature-input <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -17,47 +29,47 @@ from new_energy_sys.stage15_storage_sensitivity import (
 def parse_args() -> argparse.Namespace:
     """解析 Stage15 储能配置敏感性 CLI 参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage15 storage configuration sensitivity analysis.")
-    parser.add_argument("--config", required=True, help="Path to JSON data-source configuration.")
-    parser.add_argument("--predictions", required=True, help="Stage9 prediction CSV path.")
-    parser.add_argument("--feature-input", required=True, help="Stage3 feature parquet path.")
+    parser = argparse.ArgumentParser(description="执行 Stage 15 储能配置敏感性分析。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
+    parser.add_argument("--predictions", required=True, help="Stage 9 预测 CSV 路径。")
+    parser.add_argument("--feature-input", required=True, help="Stage 3 特征 parquet 路径。")
     parser.add_argument("--horizon-hours", type=int, default=24)
     parser.add_argument("--lookahead-hours", type=int, default=24)
     parser.add_argument(
         "--capacity-multipliers",
         default="0.5,1.0,1.5",
-        help="Comma-separated storage capacity multipliers. Default covers three levels.",
+        help="逗号分隔的储能容量倍率。默认覆盖三级。",
     )
     parser.add_argument(
         "--power-multipliers",
         default="0.5,1.0,1.5",
-        help="Comma-separated charge/discharge power multipliers. Default covers three levels.",
+        help="逗号分隔的充放电功率倍率。默认覆盖三级。",
     )
     parser.add_argument(
         "--cycle-costs",
         default="0.001,0.002,0.004",
-        help="Comma-separated degradation cost candidates in EUR/kWh.",
+        help="逗号分隔的退化成本候选值（EUR/kWh）。",
     )
     parser.add_argument(
         "--shortfall-penalties",
         default="0.0005,0.001,0.003",
-        help="Comma-separated shortfall risk penalty candidates in EUR/kWh.",
+        help="逗号分隔的缺额风险惩罚候选值（EUR/kWh）。",
     )
     parser.add_argument(
         "--terminal-penalties",
         default="0.005,0.02,0.05",
-        help="Comma-separated terminal SOC penalty candidates in EUR/kWh.",
+        help="逗号分隔的终端 SOC 惩罚候选值（EUR/kWh）。",
     )
     parser.add_argument(
         "--terminal-soc-target",
         type=float,
         default=None,
-        help="Optional terminal SOC target. Defaults to storage.soc_initial.",
+        help="可选：终端 SOC 目标值。默认使用 storage.soc_initial。",
     )
     parser.add_argument(
         "--output-prefix",
         default="stage15_storage_configuration_sensitivity",
-        help="Output filename prefix under processed_dir.",
+        help="输出文件名前缀（写入 processed_dir）。",
     )
     return parser.parse_args()
 

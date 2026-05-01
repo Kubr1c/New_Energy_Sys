@@ -1,3 +1,15 @@
+"""策略治理模块。
+
+模块设计原则：
+- 汇总 Stage 10/11/12 调度指标，输出统一策略治理评分表
+- 结构化 JSON 供机器消费，中文 Markdown 报告供人工审阅
+- 静态 HTML 仪表盘支持快速可视化审查
+
+本模块对应项目 Stage 13 的策略治理功能。
+
+入口命令: new-energy-sys run-stage13 --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -19,27 +31,27 @@ def parse_args() -> argparse.Namespace:
     治理评分表、结构化 JSON、中文 Markdown 报告和静态 HTML 仪表盘。
     """
 
-    parser = argparse.ArgumentParser(description="Run Stage13 storage strategy governance.")
-    parser.add_argument("--config", required=True, help="Path to JSON data-source configuration.")
+    parser = argparse.ArgumentParser(description="执行 Stage 13 储能策略治理。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     parser.add_argument(
         "--stage10-metrics",
         default="stage10_storage_dispatch_metrics.csv",
-        help="Stage10 metrics CSV path; relative paths are resolved under processed_dir.",
+        help="Stage 10 指标 CSV 路径；相对路径在 processed_dir 下解析。",
     )
     parser.add_argument(
         "--stage11-metrics",
         default="stage11_storage_strategy_sensitivity_metrics.csv",
-        help="Stage11 metrics CSV path; relative paths are resolved under processed_dir.",
+        help="Stage 11 指标 CSV 路径；相对路径在 processed_dir 下解析。",
     )
     parser.add_argument(
         "--stage12-metrics",
         default="stage12_storage_rolling_optimization_metrics.csv",
-        help="Stage12 metrics CSV path; relative paths are resolved under processed_dir.",
+        help="Stage 12 指标 CSV 路径；相对路径在 processed_dir 下解析。",
     )
     parser.add_argument(
         "--output-prefix",
         default="stage13_storage_strategy_governance",
-        help="Output filename prefix written under processed_dir.",
+        help="输出文件名前缀（写入 processed_dir）。",
     )
     return parser.parse_args()
 

@@ -1,3 +1,14 @@
+"""储能滚动优化调度模块。
+
+模块设计原则：
+- 使用 24h look-ahead 滚动窗口，每小时只执行首小时动作后用真实 SOC 重新求解
+- 离散 SOC 动态规划求解器和快速价差近似两种实现，默认使用快速版本
+- 目标函数包含计划收益、循环成本、短缺风险惩罚和终端 SOC 惩罚
+- 与 Stage10 固定阈值和 Stage11 最优阈值基准同表对比
+
+本模块对应项目 Stage 12 的储能滚动优化调度功能。
+"""
+
 from __future__ import annotations
 
 import json
@@ -22,9 +33,12 @@ from new_energy_sys.storage import (
 class Stage12RollingOptimizationResult:
     """Stage12 滚动优化产物容器。
 
-    results 保存小时级回放明细，metrics 保存场景级聚合指标，report 保存质量门禁、
-    策略参数和输出路径。三类产物分离，后续展示层可以直接消费 CSV/JSON，
-    不需要解析 Markdown 文本。
+    Args:
+        results: 小时级回放明细 DataFrame。
+        metrics: 场景级聚合指标 DataFrame。
+        report: 质量门禁、策略参数和输出路径的字典。
+
+    三类产物分离，后续展示层可以直接消费 CSV/JSON，不需要解析 Markdown 文本。
     """
 
     results: pd.DataFrame
@@ -36,7 +50,19 @@ def _float_config(config: dict[str, Any], key: str, default: float) -> float:
     """读取可选数值配置。
 
     Stage12 会新增若干优化惩罚项。旧配置文件没有这些字段时使用显式默认值，
-    但如果用户写入了非法值，要在入口处直接失败，避免生成看似正常但不可解释的调度结果。
+    但如果用户写入了非法值，要在入口处直接失败，避免生成看似正常但不可解释的
+    调度结果。
+
+    Args:
+        config: 储能配置字典。
+        key: 配置键名。
+        default: 缺省默认值。
+
+    Returns:
+        配置值的 float 形式。
+
+    Raises:
+        ValueError: 配置值非数值时抛出。
     """
 
     value = config.get(key, default)
@@ -51,6 +77,13 @@ def _candidate_amounts(limit_kw: float, step_kw: float) -> list[float]:
 
     离散动态规划不依赖 scipy 线性规划求解器，因此需要把连续充放电功率离散化。
     这里强制保留动作上限，避免因为步长不能整除上限而低估可用功率。
+
+    Args:
+        limit_kw: 功率上限（kW）。
+        step_kw: 离散步长（kW）。
+
+    Returns:
+        从 0 到上限的离散功率值列表。
     """
 
     if limit_kw <= 1e-12:
@@ -62,7 +95,15 @@ def _candidate_amounts(limit_kw: float, step_kw: float) -> list[float]:
 
 
 def _nearest_grid_energy(energy_kwh: float, grid: np.ndarray) -> float:
-    """把连续电池能量映射到最近的 SOC 网格点。"""
+    """把连续电池能量映射到最近的 SOC 网格点。
+
+    Args:
+        energy_kwh: 连续电池能量（kWh）。
+        grid: SOC 网格点数组。
+
+    Returns:
+        最近网格点对应的能量值（kWh）。
+    """
 
     index = int(np.abs(grid - float(energy_kwh)).argmin())
     return float(grid[index])
@@ -82,6 +123,17 @@ def _window_action_candidates(
     动作只允许三类：空闲、PV 侧充电、放电；不允许同一小时同时充放电。
     充电功率同时受 PV 预测值、PCS 功率和 SOC 剩余空间约束；放电功率同时受
     PCS 功率、SOC 可用能量和并网容量余量约束。
+
+    Args:
+        energy_kwh: 当前电池能量（kWh）。
+        forecast_pv_kw: PV 预测功率（kW）。
+        price_eur_mwh: 电价（EUR/MWh）。
+        capacity_kw: 站点容量（kW）。
+        storage_config: 储能配置字典。
+        action_step_kw: 动作离散步长（kW）。
+
+    Returns:
+        (charge_kw, discharge_kw) 元组列表，表示所有可行动作。
     """
 
     capacity_kwh = float(storage_config["capacity_kwh"])
@@ -113,7 +165,7 @@ def _window_action_candidates(
             actions.add((0.0, discharge_kw))
 
     # 高价时把放电动作排在前面，低价时把充电动作排在前面。排序不影响最优性，
-    # 但在浮点目标完全相同时能让策略更稳定、可复现。
+    # 但在浮点目标完全相同时能让策略更稳定、可复现
     if price_eur_mwh >= float(storage_config.get("discharge_price_threshold", math.inf)):
         return sorted(actions, key=lambda item: (item[1], -item[0]), reverse=True)
     return sorted(actions, key=lambda item: (item[0], -item[1]), reverse=True)
@@ -134,6 +186,18 @@ def _planned_step_value(
     目标值使用预测 PV 和电价计算计划收益，同时扣除循环成本和放电承诺惩罚。
     放电承诺惩罚不是物理成本，而是对预测误差下短缺风险的保守约束：当策略
     为了提高计划外送而额外放电时，需要付出风险预算。
+
+    Args:
+        forecast_pv_kw: PV 预测功率（kW）。
+        price_eur_mwh: 电价（EUR/MWh）。
+        charge_kw: 计划充电功率（kW）。
+        discharge_kw: 计划放电功率（kW）。
+        capacity_kw: 站点容量（kW）。
+        cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
+        shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
+
+    Returns:
+        单小时计划层目标值（EUR）。
     """
 
     planned_export_kw = min(max(forecast_pv_kw - charge_kw + discharge_kw, 0.0), capacity_kw)
@@ -162,6 +226,25 @@ def _optimize_first_action(
     实现方式是离散 SOC 动态规划：从窗口末端向前递推每个 SOC 网格点的最优
     剩余价值，当前时刻只执行首小时动作。下一小时会用真实结算后的 SOC 重新
     求解，因此不会把 24h 计划一次性固化。
+
+    Args:
+        window: 滚动窗口 DataFrame。
+        current_soc: 当前 SOC。
+        capacity_kw: 站点容量（kW）。
+        storage_config: 储能配置字典。
+        lookahead_hours: 前瞻窗口小时数。
+        soc_grid_count: SOC 离散网格点数。
+        action_step_kw: 动作离散步长（kW）。
+        cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
+        shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
+        terminal_soc_target: 终端 SOC 目标值。
+        terminal_soc_penalty_eur_per_kwh: 终端 SOC 惩罚（EUR/kWh）。
+
+    Returns:
+        包含 charge_kw、discharge_kw、planned_objective_eur 的字典。
+
+    Raises:
+        ValueError: current_soc 越界时抛出。
     """
 
     capacity_kwh = float(storage_config["capacity_kwh"])
@@ -184,7 +267,7 @@ def _optimize_first_action(
     grid = np.unique(np.append(grid, current_soc * capacity_kwh))
     grid = np.array(sorted(float(value) for value in grid))
 
-    # 终端 SOC 惩罚让优化器避免在每个滚动窗口末端无成本地贴边耗尽电池。
+    # 终端 SOC 惩罚让优化器避免在每个滚动窗口末端无成本地贴边耗尽电池
     future_value = {
         round(float(energy), 10): -abs(float(energy) - target_energy_kwh) * terminal_soc_penalty_eur_per_kwh
         for energy in grid
@@ -264,6 +347,21 @@ def _simulate_rolling_optimization(
     决策只读取当前及未来窗口内的预测 PV 和已对齐电价；结算使用真实 actual_kw。
     每小时执行首个动作后立即用真实 SOC 进入下一轮优化，符合 receding horizon
     的工程语义。
+
+    Args:
+        frame: 调度输入 DataFrame。
+        storage_config: 储能配置字典。
+        capacity_kw: 站点容量（kW）。
+        lookahead_hours: 前瞻窗口小时数。
+        soc_grid_count: SOC 离散网格点数。
+        action_step_kw: 动作离散步长（kW）。
+        cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
+        shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
+        terminal_soc_target: 终端 SOC 目标值。
+        terminal_soc_penalty_eur_per_kwh: 终端 SOC 惩罚（EUR/kWh）。
+
+    Returns:
+        小时级滚动优化回放明细 DataFrame。
     """
 
     capacity_kwh = float(storage_config["capacity_kwh"])
@@ -298,7 +396,7 @@ def _simulate_rolling_optimization(
         planned_discharge_kw = float(action["discharge_kw"])
 
         # 执行层再次按真实 PV 和真实 SOC 裁剪动作。动态规划本身已满足计划约束，
-        # 这里是防止预测高估 PV 或浮点误差导致真实执行越界。
+        # 这里是防止预测高估 PV 或浮点误差导致真实执行越界
         available_room_kw = max((soc_max - soc_start) * capacity_kwh / charge_efficiency, 0.0)
         available_energy_kw = max((soc_start - soc_min) * capacity_kwh * discharge_efficiency, 0.0)
         actual_charge_kw = min(planned_charge_kw, actual_pv_kw, available_room_kw)
@@ -375,7 +473,20 @@ def _optimize_first_action_fast(
     - 当前价处于窗口低价区，且未来高价能覆盖循环成本时充电；
     - 当前价处于窗口高价区，且已高于窗口低价和风险惩罚时放电；
     - SOC 明显偏离目标时，用窗口中位价做温和回归，避免长期贴边。
+
     该策略是滚动优化的生产化近似，不是 Stage11 的全局阈值回看扫描。
+
+    Args:
+        window: 滚动窗口 DataFrame。
+        current_soc: 当前 SOC。
+        capacity_kw: 站点容量（kW）。
+        storage_config: 储能配置字典。
+        cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
+        shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
+        terminal_soc_target: 终端 SOC 目标值。
+
+    Returns:
+        包含 charge_kw、discharge_kw、planned_objective_eur 的字典。
     """
 
     if window.empty:
@@ -405,7 +516,7 @@ def _optimize_first_action_fast(
     charge_limit_kw = min(max_charge_kw, forecast_pv_kw, available_room_kw)
     discharge_limit_kw = min(max_discharge_kw, max(capacity_kw - forecast_pv_kw, 0.0), available_energy_kw)
 
-    # 单次充放电的往返效率损耗会抬高所需价差；短缺风险惩罚进一步提高放电门槛。
+    # 单次充放电的往返效率损耗会抬高所需价差；短缺风险惩罚进一步提高放电门槛
     round_trip_efficiency = charge_efficiency * discharge_efficiency
     min_spread_eur_mwh = (cycle_cost_eur_per_kwh + shortfall_risk_penalty_eur_per_kwh) * 1000.0
     min_spread_eur_mwh = max(min_spread_eur_mwh, 0.0)
@@ -421,7 +532,7 @@ def _optimize_first_action_fast(
         and (price - future_min_price / max(round_trip_efficiency, 1e-12)) >= min_spread_eur_mwh
     )
 
-    # SOC 目标回归只在非强信号小时触发，避免为了贴目标错过明显高低价套利机会。
+    # SOC 目标回归只在非强信号小时触发，避免为了贴目标错过明显高低价套利机会
     if not should_charge and not should_discharge:
         if current_soc < terminal_soc_target - 0.05 and price <= median_price:
             should_charge = charge_limit_kw > 1e-12
@@ -456,6 +567,18 @@ def _simulate_fast_rolling_optimization(
 
     该函数与动态规划版本使用完全相同的真实结算、SOC 更新和约束审计字段，
     因此下游指标不需要区分优化器实现细节。
+
+    Args:
+        frame: 调度输入 DataFrame。
+        storage_config: 储能配置字典。
+        capacity_kw: 站点容量（kW）。
+        lookahead_hours: 前瞻窗口小时数。
+        cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
+        shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
+        terminal_soc_target: 终端 SOC 目标值。
+
+    Returns:
+        小时级快速滚动优化回放明细 DataFrame。
     """
 
     capacity_kwh = float(storage_config["capacity_kwh"])
@@ -547,7 +670,17 @@ def _scenario_metrics(
     capacity_kw: float,
     scenario: str,
 ) -> dict[str, Any]:
-    """汇总单个调度场景的经济性、动作强度和物理约束。"""
+    """汇总单个调度场景的经济性、动作强度和物理约束。
+
+    Args:
+        scenario_rows: 单个场景的小时级回放明细。
+        storage_config: 储能配置字典。
+        capacity_kw: 站点容量（kW）。
+        scenario: 场景名称。
+
+    Returns:
+        包含经济性、动作强度和物理约束的字典。
+    """
 
     constraints = _constraint_summary(scenario_rows, storage_config)
     total_charge_kwh = float(scenario_rows["actual_charge_kw"].sum())
@@ -576,7 +709,16 @@ def _scenario_metrics(
 
 
 def _no_storage_metrics(reference_rows: pd.DataFrame, *, capacity_kw: float, storage_config: dict[str, Any]) -> dict[str, Any]:
-    """生成无储能基准指标。"""
+    """生成无储能基准指标。
+
+    Args:
+        reference_rows: 回放明细 DataFrame，用于提取无储能收益。
+        capacity_kw: 站点容量（kW）。
+        storage_config: 储能配置字典。
+
+    Returns:
+        无储能基准指标字典，充电/放电/循环均为零。
+    """
 
     revenue = float(reference_rows["no_storage_revenue_eur"].sum())
     return {
@@ -627,6 +769,28 @@ def run_stage12_rolling_optimization(
 
     输入继续使用 Stage9 标准预测产物和 Stage3 市场信号。Stage12 不重新训练模型，
     只评估更严格的调度策略是否能改善 Stage11 的阈值扫描结果。
+
+    Args:
+        predictions: Stage9 预测产物 DataFrame。
+        feature_frame: 特征帧 DataFrame。
+        config: 全局配置字典。
+        horizon_hours: 预测时域（小时），默认 24。
+        lookahead_hours: 前瞻窗口小时数，默认 24。
+        soc_grid_count: SOC 离散网格点数，默认 81。
+        action_step_kw: 动作离散步长（kW），默认 0.056。
+        cycle_cost_eur_per_kwh: 循环成本覆盖参数，默认从配置读取。
+        shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚覆盖参数。
+        terminal_soc_target: 终端 SOC 目标覆盖参数。
+        terminal_soc_penalty_eur_per_kwh: 终端 SOC 惩罚覆盖参数。
+        stage11_charge_threshold: Stage11 基准充电阈值，默认 24.58。
+        stage11_discharge_threshold: Stage11 基准放电阈值，默认 35.7025。
+        output_paths: 输出产物路径字典。
+
+    Returns:
+        Stage12RollingOptimizationResult 实例。
+
+    Raises:
+        ValueError: 参数不合法时抛出。
     """
 
     capacity_kw = float(config["site"]["capacity_kw"])
@@ -768,13 +932,24 @@ def run_stage12_rolling_optimization(
 
 
 def write_stage12_json(report: dict[str, Any], path: Path) -> None:
-    """写出严格 JSON 报告。"""
+    """写出严格 JSON 报告。
+
+    Args:
+        report: 治理报告字典。
+        path: JSON 输出路径。
+    """
 
     path.write_text(json.dumps(_json_safe(report), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
 
 
 def write_stage12_report(report: dict[str, Any], metrics: pd.DataFrame, path: Path) -> None:
-    """写出 Stage12 中文 Markdown 报告。"""
+    """写出 Stage12 中文 Markdown 报告。
+
+    Args:
+        report: 治理报告字典。
+        metrics: 场景聚合指标 DataFrame。
+        path: 报告输出路径。
+    """
 
     metric_lookup = metrics.set_index("scenario")
     rolling = metric_lookup.loc["rolling_optimization"]

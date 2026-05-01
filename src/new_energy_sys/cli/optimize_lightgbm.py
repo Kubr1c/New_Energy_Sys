@@ -1,3 +1,15 @@
+"""LightGBM 诊断与优化模块。
+
+模块设计原则：
+- 对 Stage 3 特征数据集执行消融实验、分组误差分析与超参调优
+- 输出消融指标、调优指标、分组误差、特征重要性及审计报告
+- 所有产物均可追溯，支持论文与阶段报告引用
+
+本模块对应项目 Stage 5 的 LightGBM 诊断与优化功能。
+
+入口命令: new-energy-sys optimize-lightgbm --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,25 +23,25 @@ from new_energy_sys.optimization import run_stage5_optimization, write_stage5_re
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for Stage5 LightGBM diagnostics and optimization."""
+    """解析 Stage 5 LightGBM 诊断与优化命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage5 LightGBM diagnostics, ablation, and tuning.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
+    parser = argparse.ArgumentParser(description="执行 Stage 5 LightGBM 诊断、消融与调优。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     parser.add_argument(
         "--input",
         default="data/processed/nrel_opsd_weather/stage3_feature_dataset.parquet",
-        help="Stage3 feature dataset path relative to project root.",
+        help="Stage 3 特征数据集路径（相对于项目根目录）。",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Output directory relative to project root. Defaults to the config processed_dir.",
+        help="输出目录（相对于项目根目录），默认使用配置中的 processed_dir。",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Run the full Stage5 workflow and persist all audit artifacts.
+    """执行 Stage 5 全流程并落盘所有审计产物。
 
     输出文件分四类：
     - ablation_metrics：固定模型参数，只改变特征组，用来解释特征贡献；

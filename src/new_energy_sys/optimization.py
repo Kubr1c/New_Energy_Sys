@@ -1,3 +1,18 @@
+"""光伏预测误差诊断与模型优化模块。
+
+模块设计原则：
+- 消融实验必须保证"同一数据切分、同一模型类型、只改变输入特征"，确保边际收益可归因
+- 参数搜索仅在验证集上选择最优参数，测试集只用于最终一次性评估，严禁测试集泄漏
+- 分组误差诊断按小时、月份、辐照度、云量、功率爬坡等运行维度归因误差来源
+- 数据量有限时使用小型候选参数集，避免大规模随机搜索导致过拟合
+
+本模块对应项目 Stage 5 的误差诊断与优化功能，负责：
+1. 对 LightGBM 基线模型进行特征消融实验，量化天气/历史功率/预报/调度变量的边际贡献
+2. 在验证集上搜索最优超参数，测试集仅做最终评估
+3. 按运行维度分组统计误差，识别高误差场景
+4. 输出结构化报告与优化后的模型序列化文件
+"""
+
 from __future__ import annotations
 
 import json
@@ -15,12 +30,19 @@ from new_energy_sys.modeling import TARGET_COLUMNS, _chronological_split, _metri
 
 @dataclass(frozen=True)
 class OptimizationResult:
-    """Container for stage-5 diagnostics and optimization artifacts.
+    """Stage 5 诊断与优化产物容器。
 
-    本阶段不是简单“再训练一次模型”，而是把模型有效性拆成三个可审计问题：
+    本阶段不是简单"再训练一次模型"，而是把模型有效性拆成三个可审计问题：
     1. 误差主要发生在哪里：通过小时、月份、辐照度、云量、功率爬坡等维度分组。
     2. 哪类特征真的有贡献：通过固定切分、固定模型框架的消融实验量化边际收益。
     3. 参数优化是否真实提升：只用验证集选择参数，测试集只用于最终一次评估。
+
+    Attributes:
+        ablation_metrics: 消融实验全部误差指标
+        tuned_metrics: 调参后全部误差指标
+        grouped_errors: 按运行维度分组的误差统计
+        feature_importance: 特征重要性
+        report: 结构化报告字典
     """
 
     ablation_metrics: pd.DataFrame
@@ -31,11 +53,17 @@ class OptimizationResult:
 
 
 def _numeric_feature_columns(frame: pd.DataFrame) -> list[str]:
-    """Return numeric model features, excluding timestamps and prediction targets.
+    """提取数值型模型特征列，排除时间戳和预测目标列。
 
     LightGBM 只能直接消费数值矩阵。这里显式排除目标列，避免把未来功率误当作输入特征。
     `timestamp` 即使被 pandas 存成 datetime64，也不作为模型输入；时间信息已经在 Stage3
     被展开成 hour/month/day_of_year 等可学习字段。
+
+    Args:
+        frame: 输入 DataFrame
+
+    Returns:
+        可用作模型输入的数值列名列表
     """
 
     excluded = {"timestamp", *TARGET_COLUMNS}
@@ -43,20 +71,33 @@ def _numeric_feature_columns(frame: pd.DataFrame) -> list[str]:
 
 
 def _columns_containing(columns: list[str], markers: list[str]) -> list[str]:
-    """Pick columns whose names contain any marker.
+    """筛选名称中包含任一标记词的列。
 
     Stage3 的特征命名已经按领域保留了清晰前缀/后缀。使用字段名归组比手工维护 100+
     字段清单更稳健；新增天气或调度字段时，只要命名遵守当前约定，就会自动进入对应实验组。
+
+    Args:
+        columns: 候选列名列表
+        markers: 标记词列表
+
+    Returns:
+        名称中包含任一标记词的列名列表
     """
 
     return [column for column in columns if any(marker in column for marker in markers)]
 
 
 def _feature_sets(frame: pd.DataFrame) -> dict[str, list[str]]:
-    """Build diagnostic ablation feature sets.
+    """构建诊断消融特征组。
 
-    消融实验必须保证“同一数据切分、同一模型类型、只改变输入特征”。这里的特征组刻意比
+    消融实验必须保证"同一数据切分、同一模型类型、只改变输入特征"。这里的特征组刻意比
     Stage4 更细，用来回答天气、历史功率、DA/HA4 预测、调度/负荷变量各自贡献多少。
+
+    Args:
+        frame: 输入 DataFrame
+
+    Returns:
+        特征组名称到特征列名列表的映射
     """
 
     numeric_columns = _numeric_feature_columns(frame)
@@ -138,10 +179,9 @@ def _feature_sets(frame: pd.DataFrame) -> dict[str, list[str]]:
         "history_only": sorted(set(time_columns + history_columns)),
         "full_features": sorted(set(numeric_columns)),
     }
-    # PVDAQ + NSRDB has no DA/HA forecast columns. In that case keeping
-    # forecast_only would duplicate time_only and make the ablation report look
-    # more informative than it is. Only expose forecast-based groups when real
-    # forecast fields are present in the current dataset.
+    # PVDAQ + NSRDB 数据集不含 DA/HA 预报列。此时保留 forecast_only 会
+    # 与 time_only 完全重复，使消融报告看起来比实际更有信息量。
+    # 仅当数据集中确实存在预报字段时才暴露基于预报的特征组。
     if forecast_columns:
         feature_sets["forecast_only"] = sorted(set(time_columns + forecast_columns))
         feature_sets["forecast_plus_weather"] = sorted(set(time_columns + forecast_columns + weather_columns))
@@ -158,10 +198,21 @@ def _train_lightgbm(
     params: dict[str, Any],
     random_state: int,
 ) -> lgb.LGBMRegressor:
-    """Train one deterministic LightGBM model with validation early stopping.
+    """使用验证集 early stopping 训练单个确定性 LightGBM 模型。
 
     所有候选模型都使用验证集 early stopping，避免单纯提高 `n_estimators` 导致过拟合。
     测试集不会进入训练和参数选择流程，这是后续论文或报告里最重要的数据链路边界。
+
+    Args:
+        train: 训练集 DataFrame
+        validation: 验证集 DataFrame
+        features: 输入特征列名列表
+        target: 目标列名
+        params: LightGBM 超参数字典
+        random_state: 随机种子
+
+    Returns:
+        训练完成的 LGBMRegressor 模型
     """
 
     model = lgb.LGBMRegressor(
@@ -192,10 +243,19 @@ def _train_lightgbm(
 
 
 def _predict_clipped(model: lgb.LGBMRegressor, frame: pd.DataFrame, features: list[str], capacity_kw: float) -> np.ndarray:
-    """Predict PV power and enforce physical limits.
+    """预测光伏功率并强制施加物理限制。
 
     树模型是无约束回归器，夜间可能给出负值，极端天气下也可能略超装机容量。评估和上线推理
     必须统一裁剪到 `[0, 1.05 * capacity]`，否则指标和实际推理行为不一致。
+
+    Args:
+        model: 训练好的 LGBMRegressor
+        frame: 待预测的 DataFrame
+        features: 输入特征列名列表
+        capacity_kw: 装机容量（kW）
+
+    Returns:
+        物理裁剪后的预测功率数组（kW）
     """
 
     raw_prediction = model.predict(frame[features], num_iteration=model.best_iteration_)
@@ -214,7 +274,22 @@ def _evaluate_model(
     capacity_kw: float,
     model_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame, pd.DataFrame]:
-    """Evaluate a fitted model on validation and test splits."""
+    """在验证集和测试集上评估已训练模型，收集指标、预测值和特征重要性。
+
+    Args:
+        model: 已训练的 LGBMRegressor
+        splits: 包含 train/validation/test 的切分字典
+        features: 输入特征列名列表
+        target: 目标列名
+        feature_set: 特征组名称
+        experiment: 实验标签（如 "ablation" 或 "tuned"）
+        params: 模型超参数字典
+        capacity_kw: 装机容量（kW）
+        model_path: 模型序列化路径，可选
+
+    Returns:
+        (指标行列表, 预测值 DataFrame, 特征重要性 DataFrame) 三元组
+    """
 
     metric_rows: list[dict[str, Any]] = []
     prediction_frames: list[pd.DataFrame] = []
@@ -263,13 +338,16 @@ def _evaluate_model(
 
 
 def _parameter_candidates() -> list[dict[str, Any]]:
-    """Return a compact, production-safe search grid.
+    """返回紧凑的生产安全参数搜索网格。
 
     当前数据只有单年 8560 行，不适合大规模随机搜索。这里使用小型候选集覆盖：
     - 更浅/更深的树；
     - 更强/更弱的叶子约束；
     - 更强正则；
     - 更小学习率。
+
+    Returns:
+        超参数候选字典列表
     """
 
     return [
@@ -283,7 +361,16 @@ def _parameter_candidates() -> list[dict[str, Any]]:
 
 
 def _add_grouping_columns(frame: pd.DataFrame, capacity_kw: float) -> pd.DataFrame:
-    """Create stable diagnostic buckets for grouped error analysis."""
+    """为分组误差分析创建稳定的诊断分桶。
+
+    Args:
+        frame: 预测结果 DataFrame
+        capacity_kw: 装机容量（kW）
+
+    Returns:
+        添加了 hour_group, month_group, daylight_group, ghi_group, cloud_group,
+        ramp_group, forecast_spread_group 等分桶列的 DataFrame
+    """
 
     enriched = frame.copy()
     enriched["timestamp"] = pd.to_datetime(enriched["timestamp"], errors="coerce", utc=True)
@@ -302,9 +389,8 @@ def _add_grouping_columns(frame: pd.DataFrame, capacity_kw: float) -> pd.DataFra
             labels=["cloud_0_20", "cloud_20_50", "cloud_50_80", "cloud_80_100"],
         ).astype(str)
     elif "cloud_type" in enriched.columns:
-        # NSRDB PSM exposes categorical cloud_type instead of cloud-cover
-        # percentage. Preserve it as buckets so grouped diagnostics still
-        # answer whether cloudy regimes drive errors.
+        # NSRDB PSM 提供的是分类变量 cloud_type 而非云量百分比。
+        # 将其保留为分桶，使分组诊断仍能回答多云场景是否驱动高误差。
         enriched["cloud_group"] = (
             pd.to_numeric(enriched["cloud_type"], errors="coerce")
             .round()
@@ -334,7 +420,16 @@ def _add_grouping_columns(frame: pd.DataFrame, capacity_kw: float) -> pd.DataFra
 
 
 def _grouped_errors(frame: pd.DataFrame, predictions: pd.DataFrame, capacity_kw: float) -> pd.DataFrame:
-    """Aggregate test-set errors by operationally meaningful buckets."""
+    """按运行维度分桶聚合测试集误差。
+
+    Args:
+        frame: 原始特征数据集
+        predictions: 预测结果 DataFrame
+        capacity_kw: 装机容量（kW）
+
+    Returns:
+        按实验/目标/特征组/分组维度聚合的误差统计 DataFrame
+    """
 
     test_frame = frame.sort_values("timestamp").reset_index(drop=True).iloc[int(len(frame) * 0.85) :].copy()
     merge_columns = [
@@ -373,7 +468,14 @@ def _grouped_errors(frame: pd.DataFrame, predictions: pd.DataFrame, capacity_kw:
 
 
 def _best_test_by_target(metrics: pd.DataFrame) -> pd.DataFrame:
-    """Return the best test row for each target."""
+    """返回每个预测目标在测试集上的最优行。
+
+    Args:
+        metrics: 全部误差指标 DataFrame
+
+    Returns:
+        每个目标 RMSE 最优的一行组成的 DataFrame
+    """
 
     return (
         metrics[metrics["split"] == "test"]
@@ -390,7 +492,20 @@ def run_stage5_optimization(
     output_dir: Path,
     random_state: int = 42,
 ) -> OptimizationResult:
-    """Run grouped diagnostics, ablation experiments, and compact LightGBM tuning."""
+    """运行分组诊断、特征消融实验和紧凑 LightGBM 调参。
+
+    流程：先用默认参数对所有特征组做消融实验 → 选出每个目标的最优特征组 →
+    在验证集上搜索最优超参数 → 测试集仅做最终评估 → 分组统计误差。
+
+    Args:
+        frame: Stage 3 输出的特征数据集
+        config: 项目配置字典，须包含 site.capacity_kw
+        output_dir: 输出目录，模型和报告均写入此目录
+        random_state: 随机种子
+
+    Returns:
+        OptimizationResult 包含 ablation_metrics, tuned_metrics, grouped_errors, feature_importance, report
+    """
 
     capacity_kw = float(config["site"]["capacity_kw"])
     working = frame.copy()
@@ -399,9 +514,9 @@ def run_stage5_optimization(
 
     missing_targets = [target for target in TARGET_COLUMNS if target not in working.columns]
     if missing_targets:
-        raise ValueError(f"Stage5 input missing target columns: {', '.join(missing_targets)}")
+        raise ValueError(f"Stage5 输入缺少预测标签列: {', '.join(missing_targets)}")
     if working.select_dtypes(include=[np.number]).isna().sum().sum() != 0:
-        raise ValueError("Stage5 input contains missing numeric values; run Stage2/Stage3 quality gates first.")
+        raise ValueError("Stage5 输入包含缺失数值，请先运行 Stage2/Stage3 质量门控。")
 
     splits = _chronological_split(working)
     feature_sets = {name: features for name, features in _feature_sets(working).items() if features}
@@ -524,9 +639,8 @@ def run_stage5_optimization(
             ),
         },
         "pitfall": (
-            "Ablation results only explain marginal contribution under the current station, "
-            "weather source, and chronological split. If the year range, site, or weather "
-            "provider changes, the contribution ranking must be revalidated."
+            "消融结果仅在当前站点、天气来源和按时间切分条件下解释边际贡献。"
+            "若年份范围、站点或天气数据源发生变化，特征贡献排名必须重新验证。"
         ),
     }
     return OptimizationResult(
@@ -546,7 +660,16 @@ def write_stage5_report(
     feature_importance: pd.DataFrame,
     path: Path,
 ) -> None:
-    """Write the stage-5 Markdown report."""
+    """将 Stage 5 优化与诊断报告写入 Markdown 文件。
+
+    Args:
+        report: 结构化报告字典
+        ablation_metrics: 消融实验误差指标 DataFrame
+        tuned_metrics: 调参后误差指标 DataFrame
+        grouped_errors: 分组误差统计 DataFrame
+        feature_importance: 特征重要性 DataFrame
+        path: 报告输出路径
+    """
 
     best_ablation = _best_test_by_target(ablation_metrics)
     best_tuned = _best_test_by_target(tuned_metrics)

@@ -1,1 +1,8 @@
-# API package for the New Energy Storage Dispatch System frontend.
+"""新能源储能调度系统 API 包。
+
+模块设计原则：
+- 仅作为向后兼容的导入垫片，实际逻辑位于 backend.app
+- 保持对外接口稳定，内部重构不影响上层调用
+
+本模块对应项目的前端 API 层入口。
+"""

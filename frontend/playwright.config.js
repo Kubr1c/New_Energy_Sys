@@ -48,10 +48,10 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'python -m uvicorn new_energy_sys.api.main:app --host 127.0.0.1 --port 8000',
+      command: 'python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000',
       cwd: projectRoot,
       env: {
-        PYTHONPATH: path.join(projectRoot, 'src'),
+        PYTHONPATH: `${path.join(projectRoot, 'src')}${path.delimiter}${projectRoot}`,
         NES_APP_ENV: 'development',
       },
       url: 'http://127.0.0.1:8000/docs',

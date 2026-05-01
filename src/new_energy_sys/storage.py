@@ -1,3 +1,16 @@
+"""储能调度仿真模块。
+
+模块设计原则：
+- 预测驱动调度：决策仅使用预测值和电价，结算使用真实发电量，避免信息泄漏。
+- 物理约束闭环：SOC、功率、效率等储能参数在每一步严格校验，能量守恒误差不超过 1e-9。
+- 多场景对比：同时输出 forecast_dispatch、perfect_forecast、no_storage 三种场景，
+  避免单看收益导致误判。
+- 快速失败：入口处校验字段完整性，错误不伪装成"调度效果差"。
+
+本模块对应项目 Stage10 的储能调度离线仿真功能，消费 Stage9 预测表和 Stage3 特征表，
+输出小时级回放明细、场景级指标和质量门禁报告。
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,16 +23,26 @@ import pandas as pd
 
 
 def simulate_rule_based_storage(frame: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """Generate rule-based battery dispatch labels.
+    """基于规则的储能调度标签生成器。
 
-    Rule:
-    - charge when price is below the configured low-price threshold;
-    - discharge when price is above the configured high-price threshold;
-    - otherwise idle.
+    调度规则：
+    - 电价低于充电阈值时充电；
+    - 电价高于放电阈值时放电；
+    - 其余时段空闲。
 
-    The simulator enforces SOC and power constraints at every step. It is not
-    intended to be the final optimization model; it produces a reliable baseline
-    and supervised labels for the first training/demo loop.
+    每一步强制执行 SOC 和功率约束。本函数不是最终优化模型，
+    而是为首轮训练/演示循环提供可靠基线和监督标签。
+
+    Args:
+        frame: 包含 price_eur_mwh 列的小时级数据表。
+        params: 储能参数字典，包含 capacity_kwh、max_charge_kw、
+            max_discharge_kw、charge_efficiency、discharge_efficiency、
+            soc_min、soc_max、soc_initial、charge_price_threshold、
+            discharge_price_threshold。
+
+    Returns:
+        在输入表基础上追加 storage_soc、storage_charge_kw、
+        storage_discharge_kw、storage_revenue_eur 四列的数据表。
     """
 
     output = frame.copy()
@@ -48,12 +71,12 @@ def simulate_rule_based_storage(frame: pd.DataFrame, params: dict) -> pd.DataFra
         discharge_kw = 0.0
 
         if price <= charge_threshold:
-            # Available room in battery converted to AC-side charging power.
+            # 电池剩余可充空间转换为交流侧充电功率。
             available_room_kwh = max((soc_max - soc) * capacity_kwh, 0.0)
             charge_kw = min(max_charge_kw, available_room_kwh / charge_efficiency)
             soc += (charge_kw * charge_efficiency) / capacity_kwh
         elif price >= discharge_threshold:
-            # Available energy above minimum SOC converted to AC-side discharge.
+            # 可放电能量（高于最低 SOC 的部分）转换为交流侧放电功率。
             available_energy_kwh = max((soc - soc_min) * capacity_kwh, 0.0)
             discharge_kw = min(max_discharge_kw, available_energy_kwh * discharge_efficiency)
             soc -= (discharge_kw / discharge_efficiency) / capacity_kwh

@@ -1,3 +1,18 @@
+"""光伏功率预测建模模块。
+
+模块设计原则：
+- 时间序列数据必须按时间顺序切分，禁止随机切分以防数据泄漏
+- 模型评估须区分白天/夜间样本，夜间零功率下 MAPE 无意义
+- 所有预测值必须物理裁剪到 [0, 1.05 × 装机容量]，树模型无约束回归可能产出负值
+- 使用验证集 early stopping 防止过拟合，测试集仅用于最终一次性评估
+
+本模块对应项目 Stage 4 的 LightGBM 基线建模功能，负责：
+1. 按时间顺序切分训练/验证/测试集
+2. 定义多组特征集（预报+时间、天气增强、全量特征）验证数据链路
+3. 训练 LightGBM 回归器并收集误差指标、预测值、特征重要性
+4. 输出结构化报告与模型序列化文件
+"""
+
 from __future__ import annotations
 
 import json
@@ -122,16 +137,24 @@ def _feature_sets(columns: list[str]) -> dict[str, list[str]]:
 
 
 def _root_mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Compute RMSE without depending on a specific sklearn version."""
+    """计算均方根误差（RMSE），不依赖特定版本的 sklearn。"""
 
     return float(np.sqrt(np.mean(np.square(y_pred - y_true))))
 
 
 def _metrics(y_true: np.ndarray, y_pred: np.ndarray, *, capacity_kw: float) -> dict[str, float]:
-    """Compute core PV forecasting metrics.
+    """计算光伏预测核心误差指标。
 
-    MAPE is calculated only on daytime/non-trivial output samples because PV power is
-    zero for many night hours; naive MAPE around zero is numerically meaningless.
+    MAPE 仅在白天/非零功率样本上计算，因为光伏在夜间输出为零，
+    对零值附近计算 MAPE 在数值上无意义。
+
+    Args:
+        y_true: 真实功率数组（kW）
+        y_pred: 预测功率数组（kW）
+        capacity_kw: 装机容量（kW），用于归一化和白天判定阈值
+
+    Returns:
+        包含 mae_kw, rmse_kw, nrmse_capacity, bias_kw, daytime_* 等指标的字典
     """
 
     error = y_pred - y_true
@@ -178,7 +201,18 @@ def _train_one_model(
     target: str,
     random_state: int,
 ) -> lgb.LGBMRegressor:
-    """Train one LightGBM regressor with deterministic, conservative settings."""
+    """使用确定性保守超参训练单个 LightGBM 回归器。
+
+    Args:
+        train: 训练集 DataFrame
+        validation: 验证集 DataFrame，用于 early stopping
+        features: 输入特征列名列表
+        target: 目标列名
+        random_state: 随机种子，保证可复现
+
+    Returns:
+        训练完成的 LGBMRegressor 模型
+    """
 
     model = lgb.LGBMRegressor(
         objective="regression",
@@ -208,11 +242,17 @@ def _train_one_model(
 
 
 def predict_with_bundle(bundle: dict[str, Any], frame: pd.DataFrame) -> np.ndarray:
-    """Run inference from a saved model bundle with physical clipping.
+    """使用已保存的模型捆绑包进行推理，并施加物理裁剪。
 
-    LightGBM is an unconstrained regressor. Near night-time zero output it can
-    predict small negative values. The production inference surface must always
-    apply the same physical clipping used during evaluation.
+    LightGBM 是无约束回归器，在夜间零输出附近可能预测出微小负值。
+    生产推理面必须始终应用与评估阶段相同的物理裁剪，否则指标与实际行为不一致。
+
+    Args:
+        bundle: 包含 model, features, prediction_lower_bound_kw, prediction_upper_bound_kw 的字典
+        frame: 待推理的 DataFrame
+
+    Returns:
+        裁剪后的预测功率数组（kW）
     """
 
     features = bundle["features"]
@@ -229,7 +269,20 @@ def run_lightgbm_baseline(
     model_dir: Path,
     random_state: int = 42,
 ) -> BaselineModelingResult:
-    """Run LightGBM baseline experiments and return all artifacts."""
+    """运行 LightGBM 基线实验并返回所有产物。
+
+    对每个目标列 × 每个特征组，训练模型并在验证集/测试集上评估，
+    序列化模型并汇总指标、预测值、特征重要性。
+
+    Args:
+        frame: Stage 3 输出的特征数据集
+        config: 项目配置字典，须包含 site.capacity_kw
+        model_dir: 模型序列化输出目录
+        random_state: 随机种子
+
+    Returns:
+        BaselineModelingResult 包含 metrics, predictions, feature_importance, report
+    """
 
     capacity_kw = float(config["site"]["capacity_kw"])
     working = frame.copy()
@@ -361,7 +414,14 @@ def run_lightgbm_baseline(
 
 
 def write_modeling_report(report: dict[str, Any], metrics: pd.DataFrame, feature_importance: pd.DataFrame, path: Path) -> None:
-    """Write a compact Markdown report for the LightGBM baseline stage."""
+    """将 LightGBM 基线阶段的紧凑 Markdown 报告写入文件。
+
+    Args:
+        report: 结构化报告字典
+        metrics: 全部误差指标 DataFrame
+        feature_importance: 特征重要性 DataFrame
+        path: 报告输出路径
+    """
 
     best_test = metrics[metrics["split"] == "test"].sort_values(["target", "rmse_kw"]).groupby("target", as_index=False).first()
     gates = report["quality_gates"]

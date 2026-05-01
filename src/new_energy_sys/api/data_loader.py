@@ -1,187 +1,64 @@
+"""数据加载模块向后兼容导入垫片。
+
+模块设计原则：
+- 实际数据加载逻辑位于 backend.app.data_loader
+- 本模块仅重导出所有数据读取、质量报告、指标查询函数
+
+本模块对应项目的产物数据读取与 API 展示数据供给功能。
 """
-Read-only data loader for experiment artifacts.
 
-Reads CSV / JSON / Parquet files produced by Stage 1–15 and caches them
-in memory so the FastAPI endpoints can serve them without repeated disk I/O.
-"""
+from backend.app.data_loader import (
+    data_dir,
+    get_data_quality_report,
+    get_deep_learning_metrics,
+    get_dispatch_metrics,
+    get_feature_importance,
+    get_feature_report,
+    get_governance_scorecard,
+    get_main_model_metrics,
+    get_main_model_predictions,
+    get_rawhide_degradation_metrics,
+    get_rawhide_dispatch_metrics,
+    get_rawhide_report,
+    get_rawhide_sensitivity_metrics,
+    get_sensitivity_metrics,
+    get_site_config,
+    get_stage_report_json,
+    get_stage_report_md,
+    get_tabular_model_metrics,
+    get_tcn_metrics,
+    list_available_stages,
+    project_root,
+    read_csv_cached,
+    read_json_cached,
+    read_markdown_cached,
+    read_parquet_sample,
+)
 
-from __future__ import annotations
-
-import json
-import functools
-from pathlib import Path
-from typing import Any
-
-import pandas as pd
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]  # -> C:\Project\New_Energy_Sys
-_DATA_DIR = _PROJECT_ROOT / "data" / "processed" / "pvdaq_nsrdb_2020_2022"
-_CONFIG_DIR = _PROJECT_ROOT / "configs"
-_REPORTS_DIR = _PROJECT_ROOT / "reports"
-
-
-def project_root() -> Path:
-    return _PROJECT_ROOT
-
-
-def data_dir() -> Path:
-    return _DATA_DIR
-
-
-# ---------------------------------------------------------------------------
-# Generic helpers
-# ---------------------------------------------------------------------------
-
-@functools.lru_cache(maxsize=64)
-def read_csv_cached(path: str) -> list[dict]:
-    """Read a CSV file and return a list of row dicts.  Cached."""
-    p = Path(path)
-    if not p.exists():
-        return []
-    df = pd.read_csv(p)
-    # Convert NaN / inf to None for JSON serialization
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
-
-
-@functools.lru_cache(maxsize=32)
-def read_json_cached(path: str) -> Any:
-    """Read a JSON file.  Cached."""
-    p = Path(path)
-    if not p.exists():
-        return None
-    with open(p, encoding="utf-8") as f:
-        return json.load(f)
-
-
-@functools.lru_cache(maxsize=8)
-def read_parquet_sample(path: str, n: int = 500) -> list[dict]:
-    """Read the first *n* rows of a Parquet file."""
-    p = Path(path)
-    if not p.exists():
-        return []
-    df = pd.read_parquet(p).head(n)
-    df = df.where(pd.notnull(df), None)
-    # Convert timestamps to ISO strings
-    for col in df.select_dtypes(include=["datetime64", "datetimetz"]).columns:
-        df[col] = df[col].astype(str)
-    return df.to_dict(orient="records")
-
-
-@functools.lru_cache(maxsize=16)
-def read_markdown_cached(path: str) -> str | None:
-    """Read a Markdown file and return its content."""
-    p = Path(path)
-    if not p.exists():
-        return None
-    return p.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Specific loaders
-# ---------------------------------------------------------------------------
-
-def get_site_config() -> dict:
-    path = _CONFIG_DIR / "data_sources.pvdaq_nsrdb_2020_2022.json"
-    return read_json_cached(str(path)) or {}
-
-
-def get_tabular_model_metrics() -> list[dict]:
-    return read_csv_cached(str(_DATA_DIR / "stage8_tabular_model_metrics.csv"))
-
-
-def get_deep_learning_metrics() -> list[dict]:
-    return read_csv_cached(str(_DATA_DIR / "stage14_deep_learning_metrics.csv"))
-
-
-def get_tcn_metrics() -> list[dict]:
-    return read_csv_cached(str(_DATA_DIR / "stage6_tcn_metrics.csv"))
-
-
-def get_main_model_predictions(limit: int = 2000, offset: int = 0) -> list[dict]:
-    path = str(_DATA_DIR / "stage9_main_model_predictions.csv")
-    p = Path(path)
-    if not p.exists():
-        return []
-    df = pd.read_csv(p, skiprows=range(1, offset + 1) if offset else None, nrows=limit)
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
-
-
-def get_main_model_metrics() -> list[dict]:
-    return read_csv_cached(str(_DATA_DIR / "stage9_main_model_metrics.csv"))
-
-
-def get_dispatch_metrics(stage: str = "stage10") -> list[dict]:
-    mapping = {
-        "stage10": "stage10_storage_dispatch_metrics.csv",
-        "stage11": "stage11_storage_strategy_sensitivity_metrics.csv",
-        "stage12": "stage12_storage_rolling_optimization_metrics.csv",
-    }
-    filename = mapping.get(stage)
-    if not filename:
-        return []
-    return read_csv_cached(str(_DATA_DIR / filename))
-
-
-def get_governance_scorecard() -> list[dict]:
-    return read_csv_cached(str(_DATA_DIR / "stage13_storage_strategy_governance_scorecard.csv"))
-
-
-def get_sensitivity_metrics() -> list[dict]:
-    return read_csv_cached(str(_DATA_DIR / "stage15_storage_configuration_sensitivity_metrics.csv"))
-
-
-def get_feature_importance(top_n: int = 30) -> list[dict]:
-    rows = read_csv_cached(str(_DATA_DIR / "stage4_lightgbm_feature_importance.csv"))
-    if not rows:
-        return []
-    # Sort by importance descending and take top N
-    sorted_rows = sorted(rows, key=lambda r: r.get("importance", 0) or 0, reverse=True)
-    return sorted_rows[:top_n]
-
-
-def get_stage_report_json(stage: str) -> dict | None:
-    candidates = list(_DATA_DIR.glob(f"{stage}*_report.json"))
-    if not candidates:
-        return None
-    return read_json_cached(str(candidates[0]))
-
-
-def get_stage_report_md(stage: str) -> str | None:
-    candidates = list(_DATA_DIR.glob(f"{stage}*_report.md"))
-    if not candidates:
-        # Also check reports/ directory
-        candidates = list(_REPORTS_DIR.glob(f"{stage}*_report.md"))
-    if not candidates:
-        return None
-    return read_markdown_cached(str(candidates[0]))
-
-
-def get_data_quality_report() -> dict | None:
-    return read_json_cached(str(_DATA_DIR / "stage2_quality_report.json"))
-
-
-def get_feature_report() -> dict | None:
-    return read_json_cached(str(_DATA_DIR / "stage3_feature_report.json"))
-
-
-def list_available_stages() -> list[dict]:
-    """List all stages that have report files."""
-    stages = []
-    for json_file in sorted(_DATA_DIR.glob("stage*_report.json")):
-        name = json_file.stem.replace("_report", "")
-        # Extract stage number
-        stage_id = name.split("_")[0]  # e.g. "stage4"
-        stages.append({
-            "stage_id": stage_id,
-            "name": name,
-            "has_json": True,
-            "has_md": (_DATA_DIR / f"{name}.md").exists()
-                      or any(_DATA_DIR.glob(f"{stage_id}*_report.md")),
-        })
-    return stages
+__all__ = [
+    "data_dir",
+    "get_data_quality_report",
+    "get_deep_learning_metrics",
+    "get_dispatch_metrics",
+    "get_feature_importance",
+    "get_feature_report",
+    "get_governance_scorecard",
+    "get_main_model_metrics",
+    "get_main_model_predictions",
+    "get_rawhide_degradation_metrics",
+    "get_rawhide_dispatch_metrics",
+    "get_rawhide_report",
+    "get_rawhide_sensitivity_metrics",
+    "get_sensitivity_metrics",
+    "get_site_config",
+    "get_stage_report_json",
+    "get_stage_report_md",
+    "get_tabular_model_metrics",
+    "get_tcn_metrics",
+    "list_available_stages",
+    "project_root",
+    "read_csv_cached",
+    "read_json_cached",
+    "read_markdown_cached",
+    "read_parquet_sample",
+]

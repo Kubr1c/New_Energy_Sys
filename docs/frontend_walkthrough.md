@@ -38,7 +38,7 @@
 | [data_loader.py](file:///c:/Project/New_Energy_Sys/src/new_energy_sys/api/data_loader.py) | CSV/JSON/Parquet 只读数据加载器 + 缓存 |
 | [auth.py](file:///c:/Project/New_Energy_Sys/src/new_energy_sys/api/auth.py) | JWT 认证 (admin / guest) |
 | [tasks.py](file:///c:/Project/New_Energy_Sys/src/new_energy_sys/api/tasks.py) | CLI 命令异步任务触发器 |
-| [main.py](file:///c:/Project/New_Energy_Sys/src/new_energy_sys/api/main.py) | FastAPI 入口 + 所有 API 端点 |
+| [main.py](file:///c:/Project/New_Energy_Sys/backend/app/main.py) | FastAPI 入口 + 所有 API 端点 |
 
 ### 前端 (15 files)
 | File | Purpose |
@@ -81,8 +81,8 @@ All 7 core endpoints tested and returning correct data:
 ```powershell
 # 终端 1: 启动后端
 cd C:\Project\New_Energy_Sys
-$env:PYTHONPATH = "C:\Project\New_Energy_Sys\src"
-python -m uvicorn new_energy_sys.api.main:app --port 8000
+$env:PYTHONPATH = "C:\Project\New_Energy_Sys\src;C:\Project\New_Energy_Sys"
+python -m uvicorn backend.app.main:app --port 8000
 
 # 终端 2: 启动前端
 cd C:\Project\New_Energy_Sys\frontend

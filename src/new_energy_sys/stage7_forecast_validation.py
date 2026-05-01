@@ -1,3 +1,15 @@
+"""真实预报天气可用性验证模块。
+
+模块设计原则：
+- 仅替换 target_plus_* 天气列为预报发布天气，保持历史特征和标签不变
+- 泄漏门禁：要求 weather_forecast_issue_time <= 预测时间戳
+- 缺失预报行直接删除而非插补，保证训练集无隐式信息泄漏
+- 日历特征（hour_sin 等）从确定性时间戳计算，不依赖天气供应商
+- 验收门槛硬性要求：nRMSE、日间 nRMSE、泄漏、质量门禁、物理边界全部通过
+
+本模块对应项目 Stage7 的真实预报天气替代与可用性验证功能。
+"""
+
 from __future__ import annotations
 
 import json
@@ -15,7 +27,15 @@ from new_energy_sys.standardize import normalize_weather
 
 @dataclass(frozen=True)
 class Stage7Result:
-    """Stage 7 forecast-weather validation artifacts."""
+    """Stage7 预报天气验证产物容器。
+
+    Attributes:
+        forecast_weather: 预报有效时间天气表
+        feature_dataset: 替换 target_plus 后的 Stage7 特征数据集
+        metrics: TCN 实验指标 DataFrame
+        predictions: TCN 实验预测值 DataFrame
+        report: 包含质量门禁、验收结论和产物路径的报告字典
+    """
 
     forecast_weather: pd.DataFrame
     feature_dataset: pd.DataFrame
@@ -27,19 +47,19 @@ class Stage7Result:
 FORECAST_SOURCE_COMPARISON = [
     {
         "source": "NOAA HRRR f24",
-        "issue_time": "native forecast cycle",
-        "valid_time": "native GRIB valid time",
-        "lead_time": "native forecast hour f24",
-        "status": "preferred production-grade route; local full-year extraction not yet available",
-        "pitfall": "GRIB extraction is heavy; partial-cycle coverage will bias metrics if missing hours are silently filled.",
+        "issue_time": "原生预报周期",
+        "valid_time": "原生 GRIB 有效时间",
+        "lead_time": "原生预报小时 f24",
+        "status": "首选生产级路径；本地全年提取尚未完成",
+        "pitfall": "GRIB 提取开销大；缺测小时若静默填充将引入指标偏差",
     },
     {
         "source": "Open-Meteo Historical Forecast f24",
-        "issue_time": "valid_time - 24h, stored as explicit assumption",
-        "valid_time": "hourly timestamp",
-        "lead_time": "assumed 24h",
-        "status": "selected executable Stage7 route because local 2022 site-matched data already exists",
-        "pitfall": "Issue time is assumed by the simplified API export; it is weaker than native HRRR cycle metadata.",
+        "issue_time": "valid_time - 24h，作为显式假设存储",
+        "valid_time": "逐小时时间戳",
+        "lead_time": "假设 24h",
+        "status": "选定的可执行 Stage7 路径，因为本地 2022 站点匹配数据已存在",
+        "pitfall": "Issue time 是简化 API 导出的假设；弱于原生 HRRR 周期元数据",
     },
 ]
 
@@ -65,11 +85,17 @@ TARGET_PLUS_WEATHER_BASE_COLUMNS = [
 
 
 def _load_forecast_weather(path: Path) -> pd.DataFrame:
-    """Load a forecast-valid-time weather table with stable Stage3 names.
+    """加载预报有效时间天气表（使用稳定的 Stage3 列名）。
 
-    Open-Meteo raw CSV and normalized parquet are both accepted. The returned
-    table is one row per valid time, carrying the audit fields that prove the
-    model only sees weather issued no later than the PV prediction timestamp.
+    接受 Open-Meteo 原始 CSV 和标准化 parquet 两种格式。返回的表
+    每行一个有效时间，携带审计字段以证明模型仅看到不晚于
+    光伏预测时间戳发布的天气。
+
+    Args:
+        path: 天气数据文件路径（.parquet 或 .csv）
+
+    Returns:
+        按 timestamp 排序、去重且删除关键空值的天气 DataFrame
     """
 
     if path.suffix.lower() == ".parquet":
@@ -97,7 +123,14 @@ def _load_forecast_weather(path: Path) -> pd.DataFrame:
 
 
 def _target_plus_columns(frame: pd.DataFrame) -> list[str]:
-    """Return every target-valid-time feature column currently present."""
+    """返回当前存在的所有目标有效时间特征列。
+
+    Args:
+        frame: 输入数据帧
+
+    Returns:
+        以 target_plus_ 开头的列名列表
+    """
 
     return [column for column in frame.columns if column.startswith("target_plus_")]
 
@@ -108,13 +141,21 @@ def _replace_target_plus_with_forecast(
     *,
     horizons: list[int],
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-    """Replace NSRDB target-plus weather with forecast-issued weather.
+    """用预报发布天气替换 NSRDB target_plus 天气。
 
-    The input Stage3 table already contains labels, historical PV lags, dispatch
-    fields, and current-time weather features. Only `target_plus_*` columns are
-    rebuilt here. For a row at prediction timestamp `t`, each forecast feature
-    is joined from weather valid at `t + horizon`. The leakage gate requires
-    `weather_forecast_issue_time <= t`.
+    输入 Stage3 表已包含标签、历史光伏滞后、调度字段和当前时间天气特征。
+    仅 target_plus_* 列在此重建。对于预测时间戳 t 所在的行，
+    每个预报特征从有效时间 t + horizon 的天气中拼接。
+    泄漏门禁要求 weather_forecast_issue_time <= t。
+
+    Args:
+        stage3: Stage3 特征数据帧
+        forecast_weather: 预报有效时间天气 DataFrame
+        horizons: 预报提前时间列表（如 [6, 24]）
+
+    Returns:
+        元组 (替换后的特征数据集, 特征映射表, 审计字典)
+        审计字典包含 audit DataFrame 和 summary 摘要
     """
 
     working = stage3.copy()
@@ -239,7 +280,17 @@ def _replace_target_plus_with_forecast(
 
 
 def _quality_gates(feature_dataset: pd.DataFrame, forecast_audit: pd.DataFrame, predictions: pd.DataFrame, capacity_kw: float) -> dict[str, bool]:
-    """Compute the hard Stage7 gates used for the production-value decision."""
+    """计算 Stage7 用于生产可用性判定的硬门禁。
+
+    Args:
+        feature_dataset: Stage7 特征数据集
+        forecast_audit: 预报可用性审计 DataFrame
+        predictions: TCN 预测值 DataFrame
+        capacity_kw: 电站装机容量 (kW)
+
+    Returns:
+        门禁名称到是否通过的布尔映射
+    """
 
     numeric = feature_dataset.select_dtypes(include=[np.number])
     test_predictions = predictions[predictions["split"] == "test"]
@@ -264,7 +315,12 @@ def _quality_gates(feature_dataset: pd.DataFrame, forecast_audit: pd.DataFrame, 
 
 
 def _stage7_report_markdown(report: dict[str, Any], path: Path) -> None:
-    """Write the Chinese Stage7 decision report."""
+    """写出 Stage7 中文 Markdown 决策报告。
+
+    Args:
+        report: Stage7 报告字典
+        path: 输出文件路径
+    """
 
     gates = report["quality_gates"]
     metrics = report["comparison"]["stage7_tcn"]
@@ -358,7 +414,17 @@ def run_stage7_forecast_validation(
     forecast_weather_path: Path,
     output_dir: Path,
 ) -> Stage7Result:
-    """Execute Stage7 end-to-end with forecast-weather target-plus features."""
+    """端到端执行 Stage7 预报天气 target_plus 特征替代与验证。
+
+    Args:
+        config: 全局配置字典，须包含 site.capacity_kw
+        stage3_path: Stage3 parquet 数据集路径
+        forecast_weather_path: 预报天气数据路径（.parquet 或 .csv）
+        output_dir: 输出目录路径
+
+    Returns:
+        Stage7Result 包含 forecast_weather、feature_dataset、metrics、predictions、report
+    """
 
     output_dir.mkdir(parents=True, exist_ok=True)
     capacity_kw = float(config["site"]["capacity_kw"])

@@ -1,3 +1,14 @@
+"""储能策略敏感性分析模块。
+
+模块设计原则：
+- 基于电价分位数自动生成阈值候选策略，避免人工猜测固定阈值
+- 逐候选策略回放小时级调度，汇总经济性、动作强度和约束指标
+- 先过滤约束不合格候选，再按增量收益排序选择推荐策略
+- 产物分三类（明细、指标、报告），支持后续展示和自动化检查
+
+本模块对应项目 Stage 11 的储能策略敏感性分析功能。
+"""
+
 from __future__ import annotations
 
 import json
@@ -20,9 +31,13 @@ from new_energy_sys.storage import (
 class Stage11StrategySensitivityResult:
     """Stage11 储能策略敏感性分析产物容器。
 
-    results 保存小时级回放明细，metrics 保存每个候选策略的聚合指标，report 保存
-    质量门禁、推荐策略和产物路径。拆分三类产物的目的，是让后续展示、报告和自动化
-    检查都可以读取结构化数据，而不是解析 Markdown 文本。
+    Args:
+        results: 小时级回放明细 DataFrame。
+        metrics: 每个候选策略的聚合指标 DataFrame。
+        report: 质量门禁、推荐策略和产物路径的字典。
+
+    拆分三类产物的目的，是让后续展示、报告和自动化检查都可以读取结构化数据，
+    而不是解析 Markdown 文本。
     """
 
     results: pd.DataFrame
@@ -33,8 +48,15 @@ class Stage11StrategySensitivityResult:
 def _quantile_value(series: pd.Series, quantile: float) -> float:
     """计算电价分位数，并返回可稳定写入 CSV/JSON 的普通 float。
 
-    pandas 会在不同 dtype 下返回 numpy scalar。这里统一转成 Python float，避免
-    JSON 序列化和 Markdown 格式化时出现类型差异。
+    pandas 会在不同 dtype 下返回 numpy scalar。这里统一转成 Python float，
+    避免 JSON 序列化和 Markdown 格式化时出现类型差异。
+
+    Args:
+        series: 电价序列。
+        quantile: 分位数（0~1）。
+
+    Returns:
+        对应分位数的 Python float 值。
     """
 
     return float(series.quantile(float(quantile)))
@@ -49,13 +71,25 @@ def _build_threshold_candidates(
 ) -> list[dict[str, Any]]:
     """生成覆盖当前电价分布的阈值候选策略。
 
-    Stage10 的固定 `discharge_price_threshold=45.0` 高于当前样本最大电价，导致
+    Stage10 的固定 discharge_price_threshold=45.0 高于当前样本最大电价，导致
     放电永远不会触发。Stage11 不手工猜阈值，而是用分位数从样本分布中生成候选：
     - 低分位电价触发充电；
     - 高分位电价触发放电；
-    - 只保留 `charge < discharge` 的组合，避免同一区间同时满足充放电条件。
+    - 只保留 charge < discharge 的组合，避免同一区间同时满足充放电条件。
 
     同时保留 Stage10 固定阈值作为基线候选，便于在一张表中横向比较。
+
+    Args:
+        price_series: 电价序列。
+        storage_config: 储能配置字典。
+        charge_quantiles: 充电分位数列表。
+        discharge_quantiles: 放电分位数列表。
+
+    Returns:
+        候选策略字典列表，每个字典包含 strategy_id、阈值和分位数信息。
+
+    Raises:
+        ValueError: 电价序列为空或无有效候选时抛出。
     """
 
     if price_series.empty:
@@ -83,7 +117,7 @@ def _build_threshold_candidates(
         for discharge_quantile in discharge_quantiles:
             discharge_threshold = _quantile_value(price_series, discharge_quantile)
             if charge_threshold >= discharge_threshold:
-                # 价差方向错误的组合没有经济意义，也会让规则边界难以解释。
+                # 价差方向错误的组合没有经济意义，也会让规则边界难以解释
                 continue
 
             threshold_key = (round(charge_threshold, 10), round(discharge_threshold, 10))
@@ -111,6 +145,13 @@ def _candidate_storage_config(storage_config: dict[str, Any], candidate: dict[st
     """复制储能配置并替换候选阈值。
 
     不直接修改原始 config，避免候选策略之间共享可变字典造成阈值串扰。
+
+    Args:
+        storage_config: 原始储能配置字典。
+        candidate: 候选策略字典，包含 charge_price_threshold 和 discharge_price_threshold。
+
+    Returns:
+        替换阈值后的新配置字典。
     """
 
     candidate_config = dict(storage_config)
@@ -126,7 +167,17 @@ def _metrics_for_candidate(
     *,
     capacity_kw: float,
 ) -> dict[str, Any]:
-    """汇总单个候选策略的经济性、动作强度和约束指标。"""
+    """汇总单个候选策略的经济性、动作强度和约束指标。
+
+    Args:
+        scenario_rows: 单个候选策略的小时级回放明细。
+        storage_config: 储能配置字典。
+        candidate: 候选策略字典。
+        capacity_kw: 站点容量（kW）。
+
+    Returns:
+        包含经济性、动作强度和约束指标的字典。
+    """
 
     constraints = _constraint_summary(scenario_rows, storage_config)
     total_storage_revenue = float(scenario_rows["storage_revenue_eur"].sum())
@@ -163,6 +214,15 @@ def _select_best_strategy(metrics: pd.DataFrame) -> pd.Series:
 
     生产判断不能只看收益。这里先过滤掉无放电、物理约束失败的候选，再按增量收益
     排序；若所有候选都不合格，直接抛出问题，由报告暴露根因，而不是静默回退。
+
+    Args:
+        metrics: 所有候选策略的聚合指标 DataFrame。
+
+    Returns:
+        推荐策略对应的 Series 行。
+
+    Raises:
+        ValueError: 无合格策略时抛出。
     """
 
     constraint_columns = [
@@ -192,9 +252,15 @@ def _select_best_strategy(metrics: pd.DataFrame) -> pd.Series:
 def _json_safe(value: Any) -> Any:
     """递归转换 JSON 报告中的非标准数值。
 
-    Python 的 `json.dumps` 默认会把 `float("nan")` 写成 `NaN`，这不是严格 JSON。
+    Python 的 json.dumps 默认会把 float("nan") 写成 NaN，这不是严格 JSON。
     Stage11 的固定阈值基线没有分位数，因此内部用 NaN 表示缺省；写报告前统一转成
-    `None`，让产物能被前端、数据平台和严格 JSON 解析器稳定读取。
+    None，让产物能被前端、数据平台和严格 JSON 解析器稳定读取。
+
+    Args:
+        value: 需要转换的值，可以是 dict、list、numpy scalar 或 Python 标量。
+
+    Returns:
+        转换后的值，NaN/Inf 替换为 None。
     """
 
     if isinstance(value, dict):
@@ -221,8 +287,20 @@ def run_stage11_strategy_sensitivity(
     """运行 Stage11 储能策略敏感性分析。
 
     Stage11 沿用 Stage10 的预测消费和真实结算链路，只扫描价格阈值策略族。这样
-    能把当前瓶颈限定在“储能策略是否覆盖电价分布”，而不会把模型预测、天气链路、
+    能把当前瓶颈限定在"储能策略是否覆盖电价分布"，而不会把模型预测、天气链路、
     市场映射三类问题混在一起。
+
+    Args:
+        predictions: Stage9 预测产物 DataFrame。
+        feature_frame: 特征帧 DataFrame。
+        config: 全局配置字典。
+        horizon_hours: 预测时域（小时），默认 24。
+        charge_quantiles: 充电分位数列表，默认 [0.05, 0.10, 0.20, 0.30, 0.40]。
+        discharge_quantiles: 放电分位数列表，默认 [0.60, 0.70, 0.80, 0.90, 0.95]。
+        output_paths: 输出产物路径字典。
+
+    Returns:
+        Stage11StrategySensitivityResult 实例，包含 results、metrics、report。
     """
 
     capacity_kw = float(config["site"]["capacity_kw"])
@@ -336,7 +414,13 @@ def run_stage11_strategy_sensitivity(
 
 
 def write_stage11_report(report: dict[str, Any], metrics: pd.DataFrame, path: Path) -> None:
-    """写出 Stage11 中文 Markdown 报告。"""
+    """写出 Stage11 中文 Markdown 报告。
+
+    Args:
+        report: 治理报告字典。
+        metrics: 候选策略聚合指标 DataFrame。
+        path: 报告输出路径。
+    """
 
     best = report["best_strategy"]
     fixed = report["baseline"]["stage10_fixed_threshold"]
@@ -453,6 +537,11 @@ def write_stage11_report(report: dict[str, Any], metrics: pd.DataFrame, path: Pa
 
 
 def write_stage11_json(report: dict[str, Any], path: Path) -> None:
-    """写出 Stage11 JSON 报告。"""
+    """写出 Stage11 JSON 报告。
+
+    Args:
+        report: 治理报告字典。
+        path: JSON 输出路径。
+    """
 
     path.write_text(json.dumps(_json_safe(report), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")

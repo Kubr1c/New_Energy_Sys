@@ -1,3 +1,15 @@
+"""主模型推理模块。
+
+模块设计原则：
+- 加载 Stage 8 选出的最优表格模型，对特征数据集执行推理
+- 输出预测结果、评估指标及推理报告
+- 支持自定义模型包路径，默认使用 processed_dir 下 Stage 8 最优模型
+
+本模块对应项目 Stage 9 的主模型推理功能。
+
+入口命令: new-energy-sys run-stage9 --config <path> --input <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -17,21 +29,21 @@ from new_energy_sys.stage9_inference import (
 def parse_args() -> argparse.Namespace:
     """解析 Stage9 主模型推理命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage9 main-model inference.")
-    parser.add_argument("--config", required=True, help="Path to JSON data-source configuration.")
-    parser.add_argument("--input", required=True, help="Feature dataset path relative to project root.")
+    parser = argparse.ArgumentParser(description="执行 Stage 9 主模型推理。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
+    parser.add_argument("--input", required=True, help="特征数据集路径（相对于项目根目录）。")
     parser.add_argument(
         "--model-bundle",
         default=None,
         help=(
-            "Model bundle path. Defaults to the Stage8 selected "
-            "LightGBM history_only t+24h bundle under processed_dir."
+            "模型包路径。默认使用 processed_dir 下 Stage 8 选出的 "
+            "LightGBM history_only t+24h 模型包。"
         ),
     )
     parser.add_argument(
         "--output-prefix",
         default="stage9_main_model",
-        help="Output filename prefix written under processed_dir.",
+        help="输出文件名前缀（写入 processed_dir）。",
     )
     return parser.parse_args()
 

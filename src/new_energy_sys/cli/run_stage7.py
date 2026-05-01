@@ -1,3 +1,15 @@
+"""预报气象可用性验证模块。
+
+模块设计原则：
+- 检验预报气象源与 Stage 3 特征的时间对齐与字段完整性
+- 输出验证数据集、TCN 工件及决策报告
+- 决策报告明确是否可接入预报气象进行模型升级
+
+本模块对应项目 Stage 7 的预报气象可用性验证功能。
+
+入口命令: new-energy-sys run-stage7 --config <path> --stage3-input <path> --forecast-weather <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,17 +19,17 @@ from new_energy_sys.stage7_forecast_validation import run_stage7_forecast_valida
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse Stage7 forecast-weather validation arguments."""
+    """解析 Stage 7 预报气象验证命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage7 forecast-weather availability validation.")
-    parser.add_argument("--config", required=True, help="Main data-source config.")
-    parser.add_argument("--stage3-input", required=True, help="Stage3 parquet path relative to project root.")
-    parser.add_argument("--forecast-weather", required=True, help="Forecast weather CSV/parquet path relative to project root.")
+    parser = argparse.ArgumentParser(description="执行 Stage 7 预报气象可用性验证。")
+    parser.add_argument("--config", required=True, help="主数据源配置文件路径。")
+    parser.add_argument("--stage3-input", required=True, help="Stage 3 parquet 路径（相对于项目根目录）。")
+    parser.add_argument("--forecast-weather", required=True, help="预报气象 CSV/parquet 路径（相对于项目根目录）。")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Execute Stage7 and persist datasets, TCN artifacts, and decision report."""
+    """执行 Stage 7 核心逻辑并落盘数据集、TCN 工件及决策报告。"""
 
     args = parse_args()
     runtime = load_config(args.config)

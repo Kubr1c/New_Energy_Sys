@@ -1,3 +1,15 @@
+"""数据采集与标准化模块。
+
+模块设计原则：
+- 从多种数据源（NREL、OPSD、气象）采集原始光伏/负荷/市场价格数据
+- 按站点配置统一归一化，输出小时级训练表与规则储能仿真
+- 产物为 processed_dir 下的 parquet 与 CSV 预览
+
+本模块对应项目 Stage 1 的数据采集与标准化功能。
+
+入口命令: new-energy-sys bootstrap-data --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -20,12 +32,15 @@ from new_energy_sys.storage import simulate_rule_based_storage
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fetch and prepare first-stage energy dataset.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
+    """解析 Stage 1 命令行参数。"""
+
+    parser = argparse.ArgumentParser(description="采集并准备第一阶段能源数据集。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     return parser.parse_args()
 
 
 def main() -> None:
+    """执行 Stage 1 核心逻辑：采集 → 标准化 → 拼接训练表 → 储能仿真 → 落盘产物。"""
     args = parse_args()
     runtime = load_config(args.config)
 

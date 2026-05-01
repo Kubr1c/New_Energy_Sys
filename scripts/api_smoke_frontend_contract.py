@@ -17,7 +17,7 @@ def main() -> int:
     os.environ.setdefault("NES_APP_ENV", "development")
 
     from fastapi.testclient import TestClient
-    from new_energy_sys.api.main import app
+    from backend.app.main import app
 
     client = TestClient(app)
 

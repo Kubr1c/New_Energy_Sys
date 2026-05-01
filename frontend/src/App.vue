@@ -1,45 +1,47 @@
 <template>
   <div class="app-root dark">
-    <!-- Sidebar Navigation -->
-    <aside v-if="isAuthenticated && $route.name !== 'Login'" class="app-sidebar" :class="{ collapsed: sidebarCollapsed }">
-      <div class="sidebar-logo" @click="$router.push('/')">
+    <aside v-if="showShell" class="app-sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <button class="sidebar-logo" type="button" @click="$router.push('/')">
         <span class="logo-icon">⚡</span>
         <span v-if="!sidebarCollapsed" class="logo-text">NES Platform</span>
-      </div>
+      </button>
 
-      <nav class="sidebar-nav">
-        <router-link v-for="item in navItems" :key="item.path" :to="item.path"
-          class="nav-item" :class="{ active: $route.path === item.path }">
+      <nav class="sidebar-nav" aria-label="Primary navigation">
+        <router-link
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          class="nav-item"
+          :class="{ active: $route.path === item.path }"
+        >
           <el-icon :size="20"><component :is="item.icon" /></el-icon>
           <span v-if="!sidebarCollapsed" class="nav-label">{{ item.label }}</span>
         </router-link>
       </nav>
 
       <div class="sidebar-footer">
-        <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed">
+        <button class="collapse-btn" type="button" @click="sidebarCollapsed = !sidebarCollapsed">
           <el-icon :size="16"><Fold v-if="!sidebarCollapsed" /><Expand v-else /></el-icon>
         </button>
       </div>
     </aside>
 
-    <!-- Main Content -->
-    <div class="app-main" :class="{ 'no-sidebar': !isAuthenticated || $route.name === 'Login', 'sidebar-collapsed': sidebarCollapsed }">
-      <!-- Top Bar -->
-      <header v-if="isAuthenticated && $route.name !== 'Login'" class="app-header glass-panel">
+    <div class="app-main" :class="{ 'no-sidebar': !showShell, 'sidebar-collapsed': sidebarCollapsed }">
+      <header v-if="showShell" class="app-header glass-panel">
         <div class="header-left">
           <h2 class="page-title">{{ currentPageTitle }}</h2>
+          <p class="page-subtitle">{{ currentPageSubtitle }}</p>
         </div>
         <div class="header-right">
           <span class="header-clock">{{ currentTime }}</span>
-          <div class="header-user" @click="handleLogout">
+          <button class="header-user" type="button" @click="handleLogout" title="Logout">
             <el-icon><User /></el-icon>
-            <span>{{ currentUser?.display_name || 'User' }}</span>
+            <span>{{ currentUser?.display_name || currentUser?.username || 'User' }}</span>
             <el-icon class="logout-icon"><SwitchButton /></el-icon>
-          </div>
+          </button>
         </div>
       </header>
 
-      <!-- Page Content -->
       <main class="app-content">
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
@@ -52,8 +54,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { clearAuthSession, currentUser, isAuthenticated, restoreAuthSession } from './stores/authState'
 
 const router = useRouter()
 const route = useRoute()
@@ -63,39 +66,45 @@ const currentTime = ref('')
 let timer = null
 
 const navItems = [
-  { path: '/', label: '系统总览 Overview', icon: 'DataAnalysis' },
-  { path: '/models', label: '模型对比 Models', icon: 'TrendCharts' },
-  { path: '/dispatch', label: '调度仿真 Dispatch', icon: 'Setting' },
-  { path: '/governance', label: '策略治理 Governance', icon: 'Histogram' },
-  { path: '/data', label: '数据探索 Data', icon: 'DataLine' },
-  { path: '/reports', label: '实验报告 Reports', icon: 'Document' },
+  { path: '/', label: '预测监控 Overview', subtitle: 'PV forecast, site status, and model summary', icon: 'DataAnalysis' },
+  { path: '/models', label: '模型评估 Models', subtitle: 'Leaderboard and multi-metric comparison', icon: 'TrendCharts' },
+  { path: '/dispatch', label: '调度收益 Dispatch', subtitle: 'Storage strategy value and degradation replay', icon: 'Setting' },
+  { path: '/governance', label: '配置治理 Governance', subtitle: 'Sensitivity scan and Pareto selection', icon: 'Histogram' },
+  { path: '/data', label: '数据运维 Data', subtitle: 'Data quality, feature importance, and task runner', icon: 'DataLine' },
+  { path: '/reports', label: '报告归档 Reports', subtitle: 'Stage reports and experiment evidence', icon: 'Document' },
 ]
 
-const isAuthenticated = computed(() => !!localStorage.getItem('nes_token'))
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('nes_user') || 'null') } catch { return null }
-})
-const currentPageTitle = computed(() => {
-  const matched = navItems.find(n => n.path === route.path)
-  return matched?.label || ''
-})
+const showShell = computed(() => isAuthenticated.value && route.name !== 'Login')
+const currentPage = computed(() => navItems.find(item => item.path === route.path))
+const currentPageTitle = computed(() => currentPage.value?.label || 'NES Platform')
+const currentPageSubtitle = computed(() => currentPage.value?.subtitle || '')
 
 function updateTime() {
-  const now = new Date()
-  currentTime.value = now.toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  currentTime.value = new Date().toLocaleString('zh-CN', {
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 function handleLogout() {
-  localStorage.removeItem('nes_token')
-  localStorage.removeItem('nes_user')
+  clearAuthSession()
   router.push('/login')
 }
 
 onMounted(() => {
+  restoreAuthSession()
   updateTime()
   timer = setInterval(updateTime, 1000)
 })
-onUnmounted(() => { if (timer) clearInterval(timer) })
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 </script>
 
 <style scoped>
@@ -105,19 +114,18 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   background: var(--bg-primary);
 }
 
-/* ---- Sidebar ---- */
 .app-sidebar {
-  width: 240px;
+  width: 248px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-glass);
   display: flex;
   flex-direction: column;
-  transition: width var(--duration-normal) var(--ease-default);
   position: fixed;
-  top: 0; left: 0; bottom: 0;
+  inset: 0 auto 0 0;
+  transition: width var(--duration-normal) var(--ease-default);
   z-index: 100;
 }
-.app-sidebar.collapsed { width: 64px; }
+.app-sidebar.collapsed { width: 68px; }
 
 .sidebar-logo {
   height: 64px;
@@ -125,21 +133,20 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   align-items: center;
   gap: 12px;
   padding: 0 20px;
+  border: 0;
   border-bottom: 1px solid var(--border-glass);
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   overflow: hidden;
 }
-.logo-icon {
-  font-size: 24px;
-  min-width: 24px;
-  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.6));
-}
+.logo-icon { font-size: 24px; min-width: 24px; }
 .logo-text {
+  color: var(--accent-cyan);
   font-family: var(--font-display);
   font-size: 14px;
-  font-weight: 700;
-  color: var(--accent-cyan);
-  letter-spacing: 0.05em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
@@ -148,116 +155,106 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   padding: var(--space-md) var(--space-sm);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   overflow-y: auto;
 }
-
 .nav-item {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-height: 42px;
   padding: 10px 14px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  transition: all var(--duration-fast) var(--ease-default);
   text-decoration: none;
-  position: relative;
-  overflow: hidden;
   white-space: nowrap;
+  overflow: hidden;
+  position: relative;
 }
-.nav-item:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-.nav-item.active {
-  color: var(--accent-cyan);
-  background: rgba(0, 212, 255, 0.08);
-}
+.nav-item:hover { color: var(--text-primary); background: var(--bg-hover); }
+.nav-item.active { color: var(--accent-cyan); background: rgba(0, 212, 255, 0.11); }
 .nav-item.active::before {
   content: '';
   position: absolute;
-  left: 0; top: 20%; bottom: 20%;
+  left: 0;
+  top: 22%;
+  bottom: 22%;
   width: 3px;
-  background: var(--accent-cyan);
   border-radius: 0 2px 2px 0;
-  box-shadow: var(--shadow-glow-cyan);
+  background: var(--accent-cyan);
 }
-.nav-label { font-size: 13px; font-weight: 500; }
+.nav-label { font-size: 13px; font-weight: 600; }
 
-.sidebar-footer {
-  padding: var(--space-md);
-  border-top: 1px solid var(--border-glass);
-}
+.sidebar-footer { padding: var(--space-md); border-top: 1px solid var(--border-glass); }
 .collapse-btn {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 8px;
-  border: none;
+  border: 1px solid var(--border-glass);
   background: var(--bg-hover);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-default);
 }
-.collapse-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+.collapse-btn:hover { color: var(--text-primary); border-color: var(--border-active); }
 
-/* ---- Main ---- */
 .app-main {
   flex: 1;
-  margin-left: 240px;
   min-height: 100vh;
+  margin-left: 248px;
   display: flex;
   flex-direction: column;
   transition: margin-left var(--duration-normal) var(--ease-default);
 }
 .app-main.no-sidebar { margin-left: 0; }
-.app-main.sidebar-collapsed { margin-left: 64px; }
+.app-main.sidebar-collapsed { margin-left: 68px; }
 
-/* ---- Header ---- */
 .app-header {
-  height: 56px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-xl);
-  border-bottom: 1px solid var(--border-glass);
+  gap: var(--space-lg);
+  padding: 10px var(--space-xl);
   border-radius: 0;
+  border-width: 0 0 1px;
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(10, 14, 39, 0.85) !important;
-  backdrop-filter: blur(16px);
+  background: rgba(10, 14, 39, 0.92) !important;
 }
-.page-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.header-right { display: flex; align-items: center; gap: var(--space-lg); }
+.page-title { font-size: 16px; font-weight: 700; color: var(--text-primary); line-height: 1.25; }
+.page-subtitle { margin-top: 2px; font-size: 12px; color: var(--text-secondary); }
+.header-right { display: flex; align-items: center; gap: var(--space-md); }
 .header-clock {
-  font-family: var(--font-mono);
-  font-size: 12px;
   color: var(--text-secondary);
   background: var(--bg-input);
-  padding: 4px 12px;
+  border: 1px solid var(--border-glass);
   border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 5px 12px;
 }
 .header-user {
   display: flex;
   align-items: center;
   gap: 8px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 4px 12px;
-  border-radius: var(--radius-full);
-  transition: all var(--duration-fast) var(--ease-default);
   font-size: 13px;
+  padding: 6px 12px;
 }
-.header-user:hover { background: var(--bg-hover); color: var(--accent-red); }
+.header-user:hover { color: var(--accent-red); border-color: rgba(255, 82, 82, 0.35); }
 .logout-icon { font-size: 14px; }
 
-/* ---- Content ---- */
 .app-content {
   flex: 1;
-  padding: var(--space-xl);
+  padding: var(--space-lg);
   overflow-y: auto;
 }
 
@@ -267,7 +264,6 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   .app-sidebar:not(.collapsed) .nav-label { display: none; }
   .app-main,
   .app-main.sidebar-collapsed { margin-left: 72px; }
-  .app-content { padding: var(--space-lg); }
 }
 
 @media (max-width: 767px) {
@@ -275,7 +271,6 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   .app-sidebar,
   .app-sidebar.collapsed {
     position: sticky;
-    top: 0;
     width: 100%;
     height: auto;
     flex-direction: row;
@@ -286,14 +281,15 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   .sidebar-logo { width: 56px; height: 56px; padding: 0 16px; border-bottom: 0; }
   .logo-text, .nav-label, .sidebar-footer { display: none; }
   .sidebar-nav { flex-direction: row; padding: 8px; overflow-x: auto; }
-  .nav-item { width: 40px; height: 40px; justify-content: center; padding: 0; flex: 0 0 40px; }
-  .nav-item.active::before { left: 20%; right: 20%; top: auto; bottom: 0; width: auto; height: 3px; border-radius: 2px 2px 0 0; }
+  .nav-item { flex: 0 0 40px; width: 40px; height: 40px; justify-content: center; padding: 0; }
+  .nav-item.active::before { left: 20%; right: 20%; top: auto; bottom: 0; width: auto; height: 3px; }
   .app-main,
   .app-main.sidebar-collapsed { margin-left: 0; }
-  .app-header { height: auto; min-height: 56px; padding: 10px 16px; gap: 12px; align-items: flex-start; }
-  .header-right { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .app-header { align-items: flex-start; padding: 10px 16px; }
+  .header-right { justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
   .header-clock { display: none; }
   .page-title { font-size: 14px; }
+  .page-subtitle { display: none; }
   .app-content { padding: 16px; }
 }
 </style>

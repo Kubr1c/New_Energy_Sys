@@ -1,3 +1,15 @@
+"""深度学习多模型实验模块。
+
+模块设计原则：
+- 对 Stage 3 特征数据集训练 Persistence / CNN-LSTM / Attention-LSTM 等深度模型
+- 支持多窗口、多目标、多特征组与多模型架构的网格实验
+- 与 Stage 8 表格模型、Stage 6 TCN 统一对比
+
+本模块对应项目 Stage 14B 的深度学习光伏预测功能。
+
+入口命令: new-energy-sys run-stage14 --config <path> --input <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,59 +23,59 @@ from new_energy_sys.io_utils import ensure_dir
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for Stage14B multi-model experiments."""
+    """解析 Stage 14B 多模型实验命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run Stage14B Persistence/CNN-LSTM/Attention-LSTM PV forecasting.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
-    parser.add_argument("--input", required=True, help="Stage3 feature dataset path relative to project root.")
+    parser = argparse.ArgumentParser(description="执行 Stage 14B Persistence/CNN-LSTM/Attention-LSTM 光伏预测。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
+    parser.add_argument("--input", required=True, help="Stage 3 特征数据集路径（相对于项目根目录）。")
     parser.add_argument(
         "--baseline-metrics",
         default=None,
-        help="Optional Stage8 tabular metrics CSV path relative to project root.",
+        help="可选：Stage 8 表格模型指标 CSV 路径（相对于项目根目录）。",
     )
     parser.add_argument(
         "--tcn-metrics",
         default=None,
-        help="Optional Stage6 TCN metrics CSV path relative to project root.",
+        help="可选：Stage 6 TCN 指标 CSV 路径（相对于项目根目录）。",
     )
     parser.add_argument(
         "--targets",
         default="24h",
-        help="Comma-separated target aliases or full target columns. Default: 24h.",
+        help="逗号分隔的目标别名或完整目标列名。默认：24h。",
     )
     parser.add_argument(
         "--windows",
         default="96,168",
-        help="Comma-separated sequence window sizes in hours. Default: 96,168.",
+        help="逗号分隔的序列窗口大小（小时）。默认：96,168。",
     )
     parser.add_argument(
         "--feature-sets",
         default="history_only,weather_history_target_aligned",
         choices=None,
         help=(
-            "Comma-separated feature sets: history_only, weather_history_target_aligned. "
-            "The latter is an offline upper-bound group, not a real forecast-cycle input."
+            "逗号分隔的特征组：history_only, weather_history_target_aligned。"
+            "后者为离线上界组，不可用于真实预报周期。"
         ),
     )
     parser.add_argument(
         "--models",
         default="persistence,cnn_lstm,attention_lstm",
-        help="Comma-separated models: persistence, cnn_lstm, attention_lstm.",
+        help="逗号分隔的模型名：persistence, cnn_lstm, attention_lstm。",
     )
-    parser.add_argument("--max-epochs", type=int, default=30, help="Maximum training epochs per neural model.")
-    parser.add_argument("--patience", type=int, default=5, help="Validation early-stopping patience.")
-    parser.add_argument("--batch-size", type=int, default=256, help="Training and inference batch size.")
+    parser.add_argument("--max-epochs", type=int, default=30, help="每个神经网络模型最大训练轮数。")
+    parser.add_argument("--patience", type=int, default=5, help="验证集早停耐心值。")
+    parser.add_argument("--batch-size", type=int, default=256, help="训练与推理批次大小。")
     parser.add_argument(
         "--torch-threads",
         type=int,
         default=None,
-        help="Optional PyTorch CPU intra-op thread count. Use 0/omit to keep PyTorch default.",
+        help="可选：PyTorch CPU intra-op 线程数。0 或省略则使用 PyTorch 默认值。",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Run Stage14B models and persist unified artifacts."""
+    """执行 Stage 14B 多模型实验并落盘统一产物。"""
 
     args = parse_args()
     runtime = load_config(args.config)

@@ -1,3 +1,15 @@
+"""特征工程模块。
+
+模块设计原则：
+- 对 Stage 2 清洗后数据集构建时间滞后、滑动统计、日历、交叉等派生特征
+- 输出特征数据集及特征工程报告
+- 产物为 processed_dir 下的 parquet / CSV / JSON / Markdown
+
+本模块对应项目 Stage 3 的特征工程功能。
+
+入口命令: new-energy-sys build-features --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -17,17 +29,18 @@ def parse_args() -> argparse.Namespace:
     切换站点、年份或接入真实气象数据时，不需要修改代码即可复用同一入口。
     """
 
-    parser = argparse.ArgumentParser(description="Run stage-3 feature engineering.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
+    parser = argparse.ArgumentParser(description="执行 Stage 3 特征工程。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     parser.add_argument(
         "--input",
         default="data/processed/nrel_opsd/stage2_cleaned_hourly_dataset.parquet",
-        help="Stage-2 cleaned dataset path relative to project root.",
+        help="Stage 2 清洗后数据集路径（相对于项目根目录）。",
     )
     return parser.parse_args()
 
 
 def main() -> None:
+    """执行 Stage 3 核心逻辑：特征构建 → 报告 → 落盘产物。"""
     args = parse_args()
     runtime = load_config(args.config)
     processed_dir = ensure_dir(runtime.processed_dir)

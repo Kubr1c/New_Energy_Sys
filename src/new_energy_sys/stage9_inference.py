@@ -1,3 +1,17 @@
+"""Stage9 主模型推理固化模块。
+
+模块设计原则：
+- 消费不训练：只加载 Stage8 已固化的 pickle bundle，不重新训练或调参。
+- 快速失败：bundle 缺少关键字段、特征列缺失、列类型异常、NaN/Inf 等问题在入口处直接报错，
+  避免产生不可审计的推理产物。
+- 容量同源校验：bundle 保存的容量和配置文件容量必须一致，防止不同电站数据混用。
+- 标准产物：预测表字段（timestamp、target、prediction_kw、capacity_ratio、物理边界）
+  固定不变，下游调度和可视化只依赖这些标准字段。
+
+本模块对应项目 Stage9 的主模型批量推理功能，输出标准预测表、离线指标和质量门禁报告，
+供 Stage10 储能调度和展示模块消费。
+"""
+
 from __future__ import annotations
 
 import json

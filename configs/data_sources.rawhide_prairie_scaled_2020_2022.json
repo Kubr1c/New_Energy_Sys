@@ -1,0 +1,104 @@
+{
+  "project": {
+    "timezone": "UTC",
+    "raw_dir": "data/raw",
+    "processed_dir": "data/processed/pvdaq_nsrdb_2020_2022"
+  },
+  "site": {
+    "name": "rawhide_prairie_solar_scaled_from_pvdaq_system_10_2020_2022",
+    "latitude": 40.8606,
+    "longitude": -105.0189,
+    "capacity_kw": 22000.0
+  },
+  "date_range": {
+    "start": "2020-01-01",
+    "end": "2022-12-31"
+  },
+  "rawhide_reference": {
+    "name": "Rawhide Prairie Solar",
+    "location": "Rawhide Energy Station, Larimer County, Colorado",
+    "pv_capacity_kw_ac": 22000.0,
+    "battery_power_kw": 1000.0,
+    "battery_energy_kwh": 2000.0,
+    "commercial_operation_year": 2021,
+    "single_axis_tracking": true,
+    "is_measured_rawhide_generation": false,
+    "sources": [
+      {
+        "label": "Platte River Power Authority Rawhide Energy Station",
+        "url": "https://prpa.org/generation/rawhide-energy-station/"
+      },
+      {
+        "label": "Platte River Rawhide Prairie Solar FAQ",
+        "url": "https://www.prpa.org/wp-content/uploads/2019/04/Rawhide-Prairie-Solar-FAQ-final.pdf"
+      },
+      {
+        "label": "Greenbacker commercial operation announcement",
+        "url": "https://greenbackercapital.com/2021/03/greenbackers-first-solar-plus-storage-power-facility-enters-commercial-operation-providing-clean-and-continuous-energy-in-colorado/"
+      }
+    ]
+  },
+  "rawhide_simulation": {
+    "source_dataset": "PVDAQ System 10 Stage9 history_only t+24h predictions",
+    "source_capacity_kw": 1.12,
+    "target_capacity_kw": 22000.0,
+    "scaling_method": "capacity_ratio",
+    "is_measured_rawhide_generation": false
+  },
+  "sources": {
+    "pv_power": {
+      "kind": "scaled_from_stage9_predictions",
+      "base_system_id": 10,
+      "base_capacity_kw": 1.12,
+      "target_capacity_kw": 22000.0,
+      "note": "Stage18 uses capacity-ratio scaling and does not contain measured Rawhide hourly generation."
+    },
+    "weather": {
+      "kind": "inherited_from_main_experiment",
+      "note": "Stage18 does not retrain or rebuild weather features; it consumes the existing Stage9 prediction artifact."
+    },
+    "opsd": {
+      "kind": "local_csv",
+      "path": "data/raw/opsd/opsd_dk_profile_source_2015_01.csv",
+      "timestamp_candidates": ["utc_timestamp", "timestamp", "datetime"],
+      "load_candidates": ["DK_1_load_actual_entsoe_transparency", "DK_load_actual_entsoe_transparency"],
+      "price_candidates": ["DK_1_price_day_ahead", "DK_2_price_day_ahead"],
+      "align": "profile_to_pv_timeline",
+      "note": "Still an OPSD-mapped offline price/load proxy, not Colorado/Rawhide real settlement."
+    }
+  },
+  "storage": {
+    "capacity_kwh": 2000.0,
+    "max_charge_kw": 1000.0,
+    "max_discharge_kw": 1000.0,
+    "charge_efficiency": 0.95,
+    "discharge_efficiency": 0.95,
+    "soc_initial": 0.5,
+    "soc_min": 0.1,
+    "soc_max": 0.9,
+    "charge_price_threshold": 25.0,
+    "discharge_price_threshold": 45.0,
+    "cycle_cost_eur_per_kwh": 0.002,
+    "shortfall_risk_penalty_eur_per_kwh": 0.001,
+    "terminal_soc_target": 0.5,
+    "terminal_soc_penalty_eur_per_kwh": 0.02
+  },
+  "battery_degradation": {
+    "enabled": true,
+    "soh_initial": 1.0,
+    "soh_eol": 0.8,
+    "replacement_cost_eur_per_kwh": 150.0,
+    "throughput_cost_eur_per_kwh": 0.002,
+    "base_calendar_fade_per_year": 0.015,
+    "reference_temperature_c": 25.0,
+    "temperature_stress_factor": 1.0,
+    "cycle_life_curve": [
+      {"dod": 0.1, "cycles_to_eol": 15000},
+      {"dod": 0.2, "cycles_to_eol": 10000},
+      {"dod": 0.4, "cycles_to_eol": 6000},
+      {"dod": 0.6, "cycles_to_eol": 4000},
+      {"dod": 0.8, "cycles_to_eol": 3000},
+      {"dod": 1.0, "cycles_to_eol": 2000}
+    ]
+  }
+}

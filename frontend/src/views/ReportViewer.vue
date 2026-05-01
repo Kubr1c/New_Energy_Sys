@@ -1,34 +1,55 @@
 <template>
   <div class="report-viewer">
     <div class="rv-layout">
-      <!-- Stage selector -->
-      <div class="glass-card stage-list animate-fade-in-up">
-        <h3>📄 实验阶段 Stages</h3>
-        <div v-for="s in stages" :key="s.stage_id" class="stage-btn" :class="{ active: selected === s.stage_id }" @click="selectStage(s.stage_id)">
-          <span class="stage-badge">{{ s.stage_id.replace('stage', 'S') }}</span>
-          <span class="stage-label">{{ s.name }}</span>
+      <aside class="glass-card stage-list">
+        <div class="stage-header">
+          <h3>实验阶段 Stages</h3>
+          <span>{{ stages.length }} reports</span>
         </div>
-      </div>
+        <button
+          v-for="stage in stages"
+          :key="stage.stage_id"
+          type="button"
+          class="stage-btn"
+          :class="{ active: selected === stage.stage_id }"
+          :title="stage.name"
+          @click="selectStage(stage.stage_id)"
+        >
+          <span class="stage-badge">{{ stage.stage_id.replace('stage', 'S') }}</span>
+          <span class="stage-label">{{ stageLabel(stage.name) }}</span>
+          <span class="stage-format">{{ stage.has_md ? 'MD' : 'JSON' }}</span>
+        </button>
+      </aside>
 
-      <!-- Report content -->
-      <div class="glass-card report-content animate-fade-in-up animate-delay-2">
+      <section class="glass-card report-content">
         <div v-if="loading" class="report-loading">
           <el-icon class="spin" :size="24"><Loading /></el-icon>
           <span>Loading report...</span>
         </div>
+        <PageState
+          v-else-if="error && !mdContent"
+          type="error"
+          title="报告加载失败"
+          :message="error.message"
+          retryable
+          @retry="selected && selectStage(selected)"
+        />
         <div v-else-if="mdContent" class="markdown-body" v-html="renderedMd"></div>
-        <div v-else class="report-empty">
-          <p>← 请选择一个实验阶段查看报告</p>
-          <p>Select a stage from the left panel to view its report</p>
-        </div>
-      </div>
+        <PageState
+          v-else
+          type="empty"
+          title="请选择实验阶段"
+          :message="`左侧共有 ${stages.length} 个可用阶段报告，进入页面会默认打开第一个可用报告。`"
+        />
+      </section>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import api from '../utils/api'
+import { computed, onMounted, ref } from 'vue'
+import PageState from '../components/PageState.vue'
+import { fetchReportMarkdown, fetchReportStages } from '../services/reportService'
 import { normalizeApiError } from '../utils/api'
 import { renderMarkdown } from '../utils/markdown'
 
@@ -40,88 +61,119 @@ const error = ref(null)
 
 const renderedMd = computed(() => renderMarkdown(mdContent.value))
 
+function stageLabel(name) {
+  return String(name || '').replace(/_/g, ' ')
+}
+
 async function selectStage(stageId) {
   selected.value = stageId
   loading.value = true
   mdContent.value = ''
   error.value = null
   try {
-    const res = await api.get(`/api/reports/${stageId}/md`)
-    mdContent.value = res.data.content || ''
+    mdContent.value = await fetchReportMarkdown(stageId)
   } catch (e) {
-    const apiError = e.normalized || normalizeApiError(e)
-    error.value = apiError
-    mdContent.value = `> 报告加载失败\n\n${apiError.message}\n\nNo report available for ${stageId}.`
-  } finally { loading.value = false }
+    error.value = e.normalized || normalizeApiError(e)
+  } finally {
+    loading.value = false
+  }
 }
 
 onMounted(async () => {
   try {
-    const res = await api.get('/api/reports/list')
-    stages.value = res.data
-  } catch (e) { error.value = e.normalized || normalizeApiError(e) }
+    stages.value = await fetchReportStages()
+    if (stages.value.length) {
+      await selectStage(stages.value[0].stage_id)
+    }
+  } catch (e) {
+    error.value = e.normalized || normalizeApiError(e)
+  }
 })
 </script>
 
 <style scoped>
-.report-viewer { height: calc(100vh - 120px); }
-.rv-layout { display: grid; grid-template-columns: 260px 1fr; gap: var(--space-lg); height: 100%; }
-
-.stage-list { padding: var(--space-lg); overflow-y: auto; overflow-x: hidden; }
-.stage-list h3 { font-size: 14px; font-weight: 600; margin-bottom: var(--space-md); }
-.stage-btn {
-  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-  border-radius: var(--radius-sm); cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-default); margin-bottom: 4px;
-  min-width: 0;
+.report-viewer { height: calc(100vh - 112px); min-height: 560px; }
+.rv-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: var(--space-lg);
+  height: 100%;
 }
-.stage-btn:hover { background: var(--bg-hover); }
-.stage-btn.active { background: rgba(0,212,255,0.1); }
-.stage-badge { font-size: 11px; font-weight: 700; color: var(--accent-cyan); font-family: var(--font-mono); min-width: 28px; }
-.stage-label {
+.stage-list {
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+.stage-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: var(--space-md);
+}
+.stage-header h3 { color: var(--text-primary); font-size: 15px; font-weight: 700; }
+.stage-header span { color: var(--text-secondary); font-size: 12px; }
+.stage-btn {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: 5px;
+  padding: 8px 10px;
+  text-align: left;
+}
+.stage-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.stage-btn.active { background: rgba(0, 212, 255, 0.12); color: var(--text-primary); }
+.stage-badge { color: var(--accent-cyan); font-family: var(--font-mono); font-size: 11px; font-weight: 800; }
+.stage-label {
   font-size: 12px;
+  line-height: 1.35;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
-.stage-btn.active .stage-label { color: var(--text-primary); }
-
-.report-content { padding: var(--space-xl); overflow-y: auto; overflow-x: hidden; }
-.report-loading { display: flex; align-items: center; gap: 12px; color: var(--text-secondary); justify-content: center; padding: 60px; }
+.stage-format { color: var(--text-tertiary); font-size: 10px; text-align: right; }
+.report-content { overflow-y: auto; overflow-x: hidden; padding: var(--space-xl); }
+.report-loading {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-secondary);
+}
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-.report-empty { text-align: center; color: var(--text-tertiary); padding: 80px 20px; font-size: 14px; line-height: 2; }
-
-/* Markdown styling */
 .markdown-body { color: var(--text-primary); line-height: 1.8; font-size: 14px; overflow-wrap: anywhere; }
-.markdown-body :deep(h1) { font-size: 22px; font-weight: 700; margin: 24px 0 12px; color: var(--accent-cyan); border-bottom: 1px solid var(--border-glass); padding-bottom: 8px; }
-.markdown-body :deep(h2) { font-size: 18px; font-weight: 600; margin: 20px 0 10px; color: var(--text-primary); }
-.markdown-body :deep(h3) { font-size: 15px; font-weight: 600; margin: 16px 0 8px; }
+.markdown-body :deep(h1) { color: var(--accent-cyan); font-size: 22px; font-weight: 700; margin: 8px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border-glass); }
+.markdown-body :deep(h2) { font-size: 18px; font-weight: 700; margin: 20px 0 10px; }
+.markdown-body :deep(h3) { font-size: 15px; font-weight: 700; margin: 16px 0 8px; }
 .markdown-body :deep(p) { margin-bottom: 12px; }
-.markdown-body :deep(code) { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--accent-cyan); }
-.markdown-body :deep(pre) { background: var(--bg-secondary); padding: 16px; border-radius: var(--radius-md); overflow-x: auto; max-width: 100%; margin: 12px 0; border: 1px solid var(--border-glass); }
-.markdown-body :deep(pre code) { background: none; padding: 0; }
-.markdown-body :deep(table) { width: 100%; max-width: 100%; border-collapse: collapse; margin: 12px 0; }
-.markdown-body :deep(th) { background: rgba(255,255,255,0.04); padding: 8px 12px; text-align: left; font-size: 12px; color: var(--text-secondary); border-bottom: 1px solid var(--border-glass); }
-.markdown-body :deep(td) { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border-glass); }
-.markdown-body :deep(blockquote) { border-left: 3px solid var(--accent-cyan); padding-left: 16px; color: var(--text-secondary); margin: 12px 0; }
-.markdown-body :deep(ul), .markdown-body :deep(ol) { padding-left: 24px; margin-bottom: 12px; }
-.markdown-body :deep(li) { margin-bottom: 4px; }
+.markdown-body :deep(code) { background: var(--bg-input); border-radius: 4px; color: var(--accent-cyan); font-family: var(--font-mono); font-size: 13px; padding: 2px 6px; }
+.markdown-body :deep(pre) { background: var(--bg-secondary); border: 1px solid var(--border-glass); border-radius: var(--radius-md); margin: 12px 0; max-width: 100%; overflow-x: auto; padding: 16px; }
+.markdown-body :deep(table) { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; margin: 12px 0; }
+.markdown-body :deep(th),
+.markdown-body :deep(td) { border-bottom: 1px solid var(--border-glass); padding: 8px 12px; }
+.markdown-body :deep(th) { color: var(--text-secondary); font-size: 12px; text-align: left; }
+.markdown-body :deep(td) { font-size: 13px; }
+.markdown-body :deep(blockquote) { border-left: 3px solid var(--accent-cyan); color: var(--text-secondary); margin: 12px 0; padding-left: 16px; }
 
 @media (max-width: 1199px) {
-  .rv-layout { grid-template-columns: 220px minmax(0, 1fr); }
-  .report-content, .stage-list { min-width: 0; }
+  .rv-layout { grid-template-columns: 260px minmax(0, 1fr); }
 }
 
 @media (max-width: 767px) {
   .report-viewer { height: auto; min-height: calc(100vh - 112px); }
   .rv-layout { grid-template-columns: 1fr; }
-  .stage-list { max-height: 240px; }
+  .stage-list { max-height: 260px; }
   .report-content { padding: var(--space-lg); }
-  .markdown-body :deep(table) { display: block; overflow-x: auto; }
-  .markdown-body :deep(h1) { font-size: 20px; }
 }
 </style>

@@ -1,3 +1,14 @@
+"""表格模型全量对比模块。
+
+模块设计原则：
+- Stage8 是固定、可审计的表格模型对比，不是 AutoML
+- 主模型替换规则故意严格，避免为边际收益切换生产路径
+- history_only 特征组镜像 Stage5 最强无泄漏配置，禁止 target_plus 特征
+- 模型训练使用固定超参数和随机种子，保证可复现性
+
+本模块对应项目 Stage8 的表格模型全量对比功能。
+"""
+
 from __future__ import annotations
 
 import importlib
@@ -26,7 +37,13 @@ MATERIAL_IMPROVEMENT_NRMSE = 0.0030
 
 @dataclass(frozen=True)
 class TabularComparisonResult:
-    """Stage8 model-comparison artifacts."""
+    """Stage8 表格模型对比产物容器。
+
+    Attributes:
+        metrics: 各模型各特征集在各划分上的指标 DataFrame
+        predictions: 各模型各特征集的预测值 DataFrame
+        report: 包含质量门禁、推荐结论和产物路径的报告字典
+    """
 
     metrics: pd.DataFrame
     predictions: pd.DataFrame
@@ -34,11 +51,14 @@ class TabularComparisonResult:
 
 
 def ensure_required_optional_dependencies() -> None:
-    """Fail fast when required Stage8 third-party model packages are missing.
+    """当 Stage8 所需的第三方模型包缺失时快速失败。
 
-    Stage8 is explicitly a full tabular-model comparison. XGBoost and CatBoost
-    are not optional for that decision. Keeping this check separate lets the CLI
-    print a deterministic remediation command before any training work starts.
+    Stage8 明确是全量表格模型对比，XGBoost 和 CatBoost 不是可选项。
+    将此检查独立出来，使命令行界面可在任何训练工作开始前
+    打印确定性的修复命令。
+
+    Raises:
+        RuntimeError: xgboost 或 catboost 未安装时抛出
     """
 
     missing = [
@@ -54,25 +74,48 @@ def ensure_required_optional_dependencies() -> None:
 
 
 def _numeric_model_columns(frame: pd.DataFrame) -> list[str]:
-    """Return numeric columns that can be considered as model inputs."""
+    """返回可作为模型输入的数值列。
+
+    Args:
+        frame: 输入数据帧
+
+    Returns:
+        排除 timestamp 和目标列后的数值列名列表
+    """
 
     excluded = {"timestamp", *TARGET_COLUMNS}
     return [column for column in frame.select_dtypes(include=[np.number]).columns if column not in excluded]
 
 
 def _columns_containing(columns: list[str], markers: list[str]) -> list[str]:
-    """Select columns by stable Stage3 naming markers."""
+    """按 Stage3 稳定命名标记筛选列。
+
+    Args:
+        columns: 候选列名列表
+        markers: 关键字标记列表
+
+    Returns:
+        包含任一标记的列名列表
+    """
 
     return [column for column in columns if any(marker in column for marker in markers)]
 
 
 def _history_only_features(frame: pd.DataFrame) -> list[str]:
-    """Build the leakage-safe Stage8 primary feature group.
+    """构建无泄漏的 Stage8 主特征组。
 
-    This intentionally mirrors Stage5's strongest `history_only` group for
-    t+24h: deterministic calendar features plus PV lag/rolling/ramp history.
-    No `target_plus_*` column is allowed, because those represent future valid
-    time signals and would weaken the production-readiness conclusion.
+    该函数故意镜像 Stage5 最强的 history_only 特征组（用于 t+24h）：
+    确定性日历特征加上光伏滞后/滚动/斜坡历史。不允许任何 target_plus_ 列，
+    因为它们代表未来有效时间信号，会削弱生产就绪性结论。
+
+    Args:
+        frame: 输入数据帧
+
+    Returns:
+        无泄漏特征名列表
+
+    Raises:
+        ValueError: 发现 target_plus_ 特征时抛出
     """
 
     numeric = _numeric_model_columns(frame)
@@ -116,7 +159,14 @@ def _history_only_features(frame: pd.DataFrame) -> list[str]:
 
 
 def _full_features_without_target_plus(frame: pd.DataFrame) -> list[str]:
-    """Build an audit comparison group that removes future-valid-time inputs."""
+    """构建移除未来有效时间输入的审计对比特征组。
+
+    Args:
+        frame: 输入数据帧
+
+    Returns:
+        排除 target_plus_ 列后的全部数值特征名列表
+    """
 
     return sorted(
         column
@@ -126,7 +176,14 @@ def _full_features_without_target_plus(frame: pd.DataFrame) -> list[str]:
 
 
 def _stage8_feature_sets(frame: pd.DataFrame) -> dict[str, list[str]]:
-    """Resolve Stage8 feature sets with primary group first."""
+    """解析 Stage8 特征集，主特征组优先排列。
+
+    Args:
+        frame: 输入数据帧
+
+    Returns:
+        特征集名称到特征名列表的映射，空特征集被过滤
+    """
 
     feature_sets = {
         "history_only": _history_only_features(frame),
@@ -136,7 +193,16 @@ def _stage8_feature_sets(frame: pd.DataFrame) -> dict[str, list[str]]:
 
 
 def _fit_lightgbm(train: pd.DataFrame, validation: pd.DataFrame, features: list[str]) -> lgb.LGBMRegressor:
-    """Train the Stage5 tuned LightGBM history-only baseline."""
+    """训练 Stage5 调优的 LightGBM history-only 基线模型。
+
+    Args:
+        train: 训练集
+        validation: 验证集（用于早停）
+        features: 特征列名列表
+
+    Returns:
+        训练完成的 LGBMRegressor 模型
+    """
 
     model = lgb.LGBMRegressor(
         objective="regression",
@@ -166,7 +232,16 @@ def _fit_lightgbm(train: pd.DataFrame, validation: pd.DataFrame, features: list[
 
 
 def _fit_xgboost(train: pd.DataFrame, validation: pd.DataFrame, features: list[str]) -> Any:
-    """Train XGBoost with fixed, conservative GBDT parameters."""
+    """使用固定的保守 GBDT 参数训练 XGBoost 模型。
+
+    Args:
+        train: 训练集
+        validation: 验证集
+        features: 特征列名列表
+
+    Returns:
+        训练完成的 XGBRegressor 模型
+    """
 
     from xgboost import XGBRegressor
 
@@ -183,8 +258,8 @@ def _fit_xgboost(train: pd.DataFrame, validation: pd.DataFrame, features: list[s
         tree_method="hist",
         verbosity=0,
     )
-    # XGBoost version APIs differ around early-stopping arguments. Fixed
-    # estimators keep the comparison deterministic and avoid version branching.
+    # XGBoost 各版本早停参数 API 差异较大。固定 n_estimators 保持对比确定性，
+    # 避免版本分支问题
     model.fit(
         train[features],
         train[STAGE8_TARGET],
@@ -195,7 +270,16 @@ def _fit_xgboost(train: pd.DataFrame, validation: pd.DataFrame, features: list[s
 
 
 def _fit_catboost(train: pd.DataFrame, validation: pd.DataFrame, features: list[str]) -> Any:
-    """Train CatBoost without creating CatBoost side files in the workspace."""
+    """训练 CatBoost 模型，禁止在工作目录创建 CatBoost 附属文件。
+
+    Args:
+        train: 训练集
+        validation: 验证集
+        features: 特征列名列表
+
+    Returns:
+        训练完成的 CatBoostRegressor 模型
+    """
 
     from catboost import CatBoostRegressor
 
@@ -218,16 +302,24 @@ def _fit_catboost(train: pd.DataFrame, validation: pd.DataFrame, features: list[
 
 
 def _fit_extra_trees(train: pd.DataFrame, _validation: pd.DataFrame, features: list[str]) -> ExtraTreesRegressor:
-    """Train a high-variance-reducing tree ensemble baseline."""
+    """训练高方差消减树集成基线模型。
+
+    Args:
+        train: 训练集
+        _validation: 验证集（ExtraTrees 不使用）
+        features: 特征列名列表
+
+    Returns:
+        训练完成的 ExtraTreesRegressor 模型
+    """
 
     model = ExtraTreesRegressor(
         n_estimators=500,
         max_features="sqrt",
         min_samples_leaf=2,
         random_state=42,
-        # Windows sandbox can deny multiprocessing/thread-pool pipe creation.
-        # Use single-process training so Stage8 remains runnable and
-        # deterministic in restricted desktop environments.
+        # Windows 沙箱可能拒绝多进程/线程池管道创建。
+        # 使用单进程训练使 Stage8 在受限桌面环境中仍可运行且确定性不变
         n_jobs=1,
     )
     model.fit(train[features], train[STAGE8_TARGET])
@@ -235,15 +327,24 @@ def _fit_extra_trees(train: pd.DataFrame, _validation: pd.DataFrame, features: l
 
 
 def _fit_random_forest(train: pd.DataFrame, _validation: pd.DataFrame, features: list[str]) -> RandomForestRegressor:
-    """Train a standard bagged-tree baseline."""
+    """训练标准装袋树基线模型。
+
+    Args:
+        train: 训练集
+        _validation: 验证集（RandomForest 不使用）
+        features: 特征列名列表
+
+    Returns:
+        训练完成的 RandomForestRegressor 模型
+    """
 
     model = RandomForestRegressor(
         n_estimators=500,
         max_features="sqrt",
         min_samples_leaf=2,
         random_state=42,
-        # See `_fit_extra_trees`; avoiding joblib pools prevents WinError 5 in
-        # restricted environments while preserving model semantics.
+        # 同 _fit_extra_trees，避免 joblib 线程池以防受限环境下 WinError 5，
+        # 同时保持模型语义不变
         n_jobs=1,
     )
     model.fit(train[features], train[STAGE8_TARGET])
@@ -251,7 +352,16 @@ def _fit_random_forest(train: pd.DataFrame, _validation: pd.DataFrame, features:
 
 
 def _fit_ridge(train: pd.DataFrame, _validation: pd.DataFrame, features: list[str]) -> Pipeline:
-    """Train a scaled linear lower-bound model."""
+    """训练标准化线性下界模型。
+
+    Args:
+        train: 训练集
+        _validation: 验证集（Ridge 不使用）
+        features: 特征列名列表
+
+    Returns:
+        包含 StandardScaler + Ridge 的 Pipeline 模型
+    """
 
     model = Pipeline(
         [
@@ -264,7 +374,16 @@ def _fit_ridge(train: pd.DataFrame, _validation: pd.DataFrame, features: list[st
 
 
 def _fit_elastic_net(train: pd.DataFrame, _validation: pd.DataFrame, features: list[str]) -> Pipeline:
-    """Train a scaled sparse-linear lower-bound model."""
+    """训练标准化稀疏线性下界模型。
+
+    Args:
+        train: 训练集
+        _validation: 验证集（ElasticNet 不使用）
+        features: 特征列名列表
+
+    Returns:
+        包含 StandardScaler + ElasticNet 的 Pipeline 模型
+    """
 
     model = Pipeline(
         [
@@ -277,7 +396,11 @@ def _fit_elastic_net(train: pd.DataFrame, _validation: pd.DataFrame, features: l
 
 
 def _model_fitters() -> dict[str, Any]:
-    """Return Stage8 model fitters in report order."""
+    """返回 Stage8 模型训练器字典（按报告顺序排列）。
+
+    Returns:
+        模型名称到训练函数的映射
+    """
 
     return {
         "lightgbm_tuned": _fit_lightgbm,
@@ -291,7 +414,17 @@ def _model_fitters() -> dict[str, Any]:
 
 
 def _predict_clipped(model: Any, frame: pd.DataFrame, features: list[str], capacity_kw: float) -> np.ndarray:
-    """Run model inference and enforce PV physical limits."""
+    """执行模型推理并强制光伏物理限值 [0, capacity_kw * 1.05]。
+
+    Args:
+        model: 训练好的模型对象
+        frame: 输入数据帧
+        features: 特征列名列表
+        capacity_kw: 电站装机容量 (kW)
+
+    Returns:
+        裁剪后的预测值数组
+    """
 
     prediction = np.asarray(model.predict(frame[features]), dtype=float)
     return np.clip(prediction, 0.0, capacity_kw * 1.05)
@@ -307,7 +440,20 @@ def _evaluate(
     capacity_kw: float,
     model_path: Path,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame]:
-    """Evaluate one fitted model on validation and test splits."""
+    """在验证集和测试集上评估单个已训练模型。
+
+    Args:
+        model: 训练好的模型对象
+        model_name: 模型名称
+        feature_set: 特征集名称
+        features: 特征列名列表
+        splits: 包含 train/validation/test 的数据划分字典
+        capacity_kw: 电站装机容量 (kW)
+        model_path: 模型持久化路径
+
+    Returns:
+        元组：(指标行列表, 预测值 DataFrame)
+    """
 
     metric_rows: list[dict[str, Any]] = []
     prediction_frames: list[pd.DataFrame] = []
@@ -343,7 +489,17 @@ def _evaluate(
 
 
 def _select_recommendation(metrics: pd.DataFrame) -> dict[str, Any]:
-    """Apply the explicit Stage8主模型 selection rule."""
+    """应用 Stage8 主模型显式选择规则。
+
+    规则：仅当 XGBoost/CatBoost 的 nRMSE 改善量 >= 0.0030 且日间 nRMSE
+    不退化时，才允许替换 LightGBM。
+
+    Args:
+        metrics: 全部指标 DataFrame
+
+    Returns:
+        推荐结论字典，包含 selected_model、can_replace_lightgbm、reason 等
+    """
 
     test = metrics[(metrics["split"] == "test") & (metrics["feature_set"] == "history_only")].copy()
     test = test.sort_values(["nrmse_capacity", "daytime_nrmse_capacity"]).reset_index(drop=True)
@@ -365,9 +521,9 @@ def _select_recommendation(metrics: pd.DataFrame) -> dict[str, Any]:
         "best_vs_lightgbm_nrmse_delta": improvement,
         "can_replace_lightgbm": bool(can_replace),
         "reason": (
-            "XGBoost/CatBoost materially improves nRMSE and does not degrade daytime nRMSE."
+            "XGBoost/CatBoost 显著改善 nRMSE 且未退化日间 nRMSE。"
             if can_replace
-            else "No eligible challenger materially beats LightGBM history_only under the Stage8 rule."
+            else "无合格挑战者能在 Stage8 规则下显著击败 LightGBM history_only。"
         ),
     }
 
@@ -378,7 +534,20 @@ def run_tabular_model_comparison(
     *,
     output_dir: Path,
 ) -> TabularComparisonResult:
-    """Run Stage8 tabular model comparison end-to-end."""
+    """端到端运行 Stage8 表格模型对比。
+
+    Args:
+        frame: Stage3 特征数据帧
+        config: 全局配置字典，须包含 site.capacity_kw
+        output_dir: 输出目录路径
+
+    Returns:
+        TabularComparisonResult 包含 metrics、predictions、report 三部分
+
+    Raises:
+        ValueError: 缺少目标列、存在缺失/无穷数值时抛出
+        RuntimeError: 缺少 xgboost/catboost 依赖时抛出
+    """
 
     ensure_required_optional_dependencies()
 
@@ -467,15 +636,21 @@ def run_tabular_model_comparison(
             "report_has_final_recommendation": bool(recommendation["selected_model"]),
         },
         "pitfall": (
-            "Stage8 is not AutoML. It is a fixed, auditable comparison of high-probability tabular models. "
-            "The replacement rule is intentionally strict to avoid swapping the production route for a marginal gain."
+            "Stage8 不是 AutoML，而是固定、可审计的高概率表格模型对比。"
+            "替换规则故意严格，避免为边际收益切换生产路径。"
         ),
     }
     return TabularComparisonResult(metrics=metrics, predictions=predictions, report=report)
 
 
 def write_tabular_comparison_report(report: dict[str, Any], metrics: pd.DataFrame, path: Path) -> None:
-    """Write the Stage8 Markdown decision report."""
+    """写出 Stage8 Markdown 决策报告。
+
+    Args:
+        report: Stage8 报告字典
+        metrics: 全部指标 DataFrame
+        path: 输出文件路径
+    """
 
     test_rows = metrics[metrics["split"] == "test"].sort_values(["feature_set", "nrmse_capacity"])
     history_rows = test_rows[test_rows["feature_set"] == "history_only"].copy()

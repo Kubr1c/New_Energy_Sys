@@ -1,3 +1,15 @@
+"""LightGBM 基线模型训练模块。
+
+模块设计原则：
+- 对 Stage 3 特征数据集训练 LightGBM 基线预测模型
+- 输出模型文件、预测结果、特征重要性及建模报告
+- 产物为 processed_dir/models 及指标 CSV / JSON / Markdown
+
+本模块对应项目 Stage 4 的基线模型训练功能。
+
+入口命令: new-energy-sys train-baseline --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,24 +23,25 @@ from new_energy_sys.modeling import run_lightgbm_baseline, write_modeling_report
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse the stage-4 baseline training arguments."""
+    """解析 Stage 4 基线训练命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Train stage-4 LightGBM baseline models.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
+    parser = argparse.ArgumentParser(description="训练 Stage 4 LightGBM 基线模型。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     parser.add_argument(
         "--input",
         default="data/processed/nrel_opsd_weather/stage3_feature_dataset.parquet",
-        help="Stage-3 feature dataset path relative to project root.",
+        help="Stage 3 特征数据集路径（相对于项目根目录）。",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Output directory relative to project root. Defaults to the config processed_dir.",
+        help="输出目录（相对于项目根目录），默认使用配置中的 processed_dir。",
     )
     return parser.parse_args()
 
 
 def main() -> None:
+    """执行 Stage 4 核心逻辑：训练基线模型 → 输出指标与报告 → 落盘产物。"""
     args = parse_args()
     runtime = load_config(args.config)
 

@@ -53,5 +53,23 @@
     "soc_max": 0.9,
     "charge_price_threshold": 35.0,
     "discharge_price_threshold": 80.0
+  },
+  "battery_degradation": {
+    "enabled": true,
+    "soh_initial": 1.0,
+    "soh_eol": 0.8,
+    "replacement_cost_eur_per_kwh": 150.0,
+    "throughput_cost_eur_per_kwh": 0.002,
+    "base_calendar_fade_per_year": 0.015,
+    "reference_temperature_c": 25.0,
+    "temperature_stress_factor": 1.0,
+    "cycle_life_curve": [
+      {"dod": 0.1, "cycles_to_eol": 15000},
+      {"dod": 0.2, "cycles_to_eol": 10000},
+      {"dod": 0.4, "cycles_to_eol": 6000},
+      {"dod": 0.6, "cycles_to_eol": 4000},
+      {"dod": 0.8, "cycles_to_eol": 3000},
+      {"dod": 1.0, "cycles_to_eol": 2000}
+    ]
   }
 }

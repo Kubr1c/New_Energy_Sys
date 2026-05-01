@@ -1,3 +1,15 @@
+"""HRRR 高分辨率快速更新预报提取模块。
+
+模块设计原则：
+- 单站点最近邻提取，不做精确测地重映射
+- 仅选取项目所需最小变量集，保持首次实现小且可测试
+- GRIB2 子集按字节范围下载，控制磁盘和算力开销
+- 禁用 cfgrib 磁盘索引复用，避免过期 .idx 文件产生兼容警告
+- 单位感知转换强制执行，防止量级错误静默传播
+
+本模块对应项目天气数据链路中 HRRR GRIB2 点预报提取功能。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,11 +26,14 @@ import requests
 
 @dataclass(frozen=True)
 class HrrrPointSample:
-    """One HRRR point-forecast sample extracted from a single GRIB2 file.
+    """从单个 HRRR GRIB2 文件提取的点预报样本。
 
-    The stage goal is not full production ingestion yet. This container keeps
-    the extraction output explicit and auditable so later multi-file ingestion
-    can reuse the same weather schema without rewriting the downstream stages.
+    当前阶段目标不是全量生产入库。该容器保持提取输出显式且可审计，
+    后续多文件入库可复用同一天气模式，无需重写下游阶段。
+
+    Attributes:
+        frame: 单行 DataFrame，包含提取的气象变量
+        metadata: 提取元数据字典（路径、坐标、可用变量列表等）
     """
 
     frame: pd.DataFrame
@@ -27,7 +42,15 @@ class HrrrPointSample:
 
 @dataclass(frozen=True)
 class HrrrIndexRecord:
-    """One byte-range addressable record from an HRRR `.idx` sidecar file."""
+    """HRRR .idx 伴生文件中一条可按字节范围寻址的记录。
+
+    Attributes:
+        line_number: 行号
+        start_byte: 起始字节偏移
+        short_name: GRIB 变量短名
+        level: 垂直层描述
+        descriptor: 预报时次等描述信息
+    """
 
     line_number: int
     start_byte: int
@@ -37,12 +60,17 @@ class HrrrIndexRecord:
 
 
 def _open_hrrr_datasets(grib_path: Path) -> list[Any]:
-    """Open all logical xarray datasets inside one HRRR GRIB2 file.
+    """打开单个 HRRR GRIB2 文件中的所有逻辑 xarray 数据集。
 
-    HRRR surface products contain many variable groups with different vertical
-    coordinates and cfgrib exposes them as multiple xarray datasets. The code
-    disables on-disk index reuse because stale `.idx` files frequently produce
-    noisy compatibility warnings after file replacement or partial retries.
+    HRRR 地面产品包含多个不同垂直坐标的变量组，cfgrib 将它们
+    暴露为多个 xarray 数据集。此函数禁用磁盘索引复用，因为
+    文件替换或部分重试后过期 .idx 文件经常产生嘈杂的兼容性警告。
+
+    Args:
+        grib_path: GRIB2 文件路径
+
+    Returns:
+        xarray 数据集列表
     """
 
     with warnings.catch_warnings():
@@ -51,10 +79,16 @@ def _open_hrrr_datasets(grib_path: Path) -> list[Any]:
 
 
 def _parse_idx_records(idx_text: str) -> list[HrrrIndexRecord]:
-    """Parse an HRRR `.idx` file into byte-addressable record metadata.
+    """解析 HRRR .idx 文件为可按字节寻址的记录元数据。
 
-    Example line:
+    示例行：
     `71:49695389:d=2022010100:TMP:2 m above ground:24 hour fcst:`
+
+    Args:
+        idx_text: .idx 文件原始文本
+
+    Returns:
+        HrrrIndexRecord 列表
     """
 
     records: list[HrrrIndexRecord] = []
@@ -78,7 +112,20 @@ def _parse_idx_records(idx_text: str) -> list[HrrrIndexRecord]:
 
 
 def _selected_hrrr_records(records: list[HrrrIndexRecord]) -> list[HrrrIndexRecord]:
-    """Select the minimum variable set needed by the strict-weather pilot."""
+    """选取严格天气试点所需的最小变量集。
+
+    所需变量：2m 温度、2m 相对湿度、10m 风速分量、地面累积降水、
+    全天空云量、地面向下短波辐射、地面气压。
+
+    Args:
+        records: 全部 idx 记录列表
+
+    Returns:
+        按 start_byte 排序的选中记录列表
+
+    Raises:
+        ValueError: 缺少必需变量时抛出
+    """
 
     required_patterns = [
         ("TMP", "2 m above ground"),
@@ -119,11 +166,20 @@ def _download_hrrr_subset(
     subset_target: Path,
     timeout_seconds: int = 120,
 ) -> Path:
-    """Download only the GRIB messages needed for strict weather extraction.
+    """仅下载项目变量所需的 GRIB 消息子集。
 
-    Monthly HRRR extraction is only tractable if each large source GRIB2 file is
-    sliced down to the byte ranges needed for the project variables. This keeps
-    disk usage and decode time bounded without introducing a separate GRIB CLI.
+    月度 HRRR 提取只有在每个大型源 GRIB2 文件被按字节范围裁剪到
+    项目所需变量后才是可行的。这控制了磁盘使用和解码时间，
+    无需引入单独的 GRIB 命令行工具。
+
+    Args:
+        grib_url: 源 GRIB2 文件 URL
+        idx_url: 源 .idx 伴生文件 URL
+        subset_target: 子集目标本地路径
+        timeout_seconds: HTTP 请求超时秒数
+
+    Returns:
+        子集文件路径（若已存在则直接返回）
     """
 
     if subset_target.exists():
@@ -159,7 +215,15 @@ def _download_hrrr_subset(
 
 
 def _first_data_array(datasets: list[Any], variable_name: str) -> Any | None:
-    """Return the first xarray DataArray matching the requested variable name."""
+    """返回第一个匹配请求变量名的 xarray DataArray。
+
+    Args:
+        datasets: xarray 数据集列表
+        variable_name: 目标变量名
+
+    Returns:
+        匹配的 DataArray，未找到则返回 None
+    """
 
     for dataset in datasets:
         if variable_name in dataset.data_vars:
@@ -168,13 +232,20 @@ def _first_data_array(datasets: list[Any], variable_name: str) -> Any | None:
 
 
 def _select_point(data_array: Any, latitude: float, longitude: float) -> tuple[float, float, float]:
-    """Select the nearest HRRR grid point and return value + grid coordinates.
+    """选择最近的 HRRR 网格点并返回数值与网格坐标。
 
-    HRRR latitude/longitude are 2D coordinates over the native Lambert grid.
-    Using xarray's standard `.sel(..., method="nearest")` is not reliable on
-    2D coordinates, so this function computes the nearest grid cell manually.
-    The distance metric is intentionally simple because the target use case is
-    single-station nearest-neighbor extraction, not exact geodesic remapping.
+    HRRR 的经纬度是原生 Lambert 投影网格上的二维坐标。
+    xarray 标准的 .sel(..., method="nearest") 在二维坐标上不可靠，
+    因此本函数手动计算最近网格单元。距离度量故意简化，
+    因为目标用例是单站点最近邻提取，不是精确测地重映射。
+
+    Args:
+        data_array: 目标变量 DataArray
+        latitude: 请求纬度
+        longitude: 请求经度
+
+    Returns:
+        元组 (变量值, 网格纬度, 网格经度)
     """
 
     lat_grid = data_array.latitude.values
@@ -198,7 +269,15 @@ def _select_point(data_array: Any, latitude: float, longitude: float) -> tuple[f
 
 
 def _scalar_coord(data_array: Any, coord_name: str) -> str | None:
-    """Return a scalar coordinate as an ISO-like string when available."""
+    """当标量坐标可用时，返回其 ISO 格式字符串。
+
+    Args:
+        data_array: 目标 DataArray
+        coord_name: 坐标名称
+
+    Returns:
+        ISO 格式时间字符串，坐标不存在则返回 None
+    """
 
     if coord_name not in data_array.coords:
         return None
@@ -207,21 +286,42 @@ def _scalar_coord(data_array: Any, coord_name: str) -> str | None:
 
 
 def _convert_temperature_k_to_c(value: float | None) -> float | None:
+    """将温度从开尔文转换为摄氏度。
+
+    Args:
+        value: 开尔文温度值
+
+    Returns:
+        摄氏度温度值，输入为 None 或 NaN 时返回 None
+    """
     return None if value is None or math.isnan(value) else value - 273.15
 
 
 def _convert_pressure_pa_to_hpa(value: float | None) -> float | None:
+    """将气压从帕斯卡转换为百帕。
+
+    Args:
+        value: 帕斯卡气压值
+
+    Returns:
+        百帕气压值，输入为 None 或 NaN 时返回 None
+    """
     return None if value is None or math.isnan(value) else value / 100.0
 
 
 def _convert_precipitation_to_mm(value: float | None, units: str | None) -> float | None:
-    """Convert HRRR precipitation to millimetres using the declared GRIB units.
+    """根据 GRIB 声明单位将 HRRR 降水量转换为毫米。
 
-    HRRR commonly exposes accumulated precipitation as `kg m**-2`, which is
-    numerically equivalent to millimetres of water depth. Some products use
-    metres instead. Unit-aware conversion is mandatory here because a naive
-    `*1000` would silently inflate rainfall totals by three orders of magnitude
-    when the GRIB payload is already in `kg m**-2`.
+    HRRR 通常以 kg m**-2 暴露累积降水，数值上等效于毫米水深。
+    部分产品使用米。此处必须进行单位感知转换，因为当 GRIB 载荷
+    已经是 kg m**-2 时，简单的 *1000 会将降水总量静默放大三个量级。
+
+    Args:
+        value: 原始降水量值
+        units: GRIB 声明的单位字符串
+
+    Returns:
+        毫米降水量，输入为 None 或 NaN 时返回 None
     """
 
     if value is None or math.isnan(value):
@@ -235,6 +335,16 @@ def _convert_precipitation_to_mm(value: float | None, units: str | None) -> floa
 
 
 def _convert_cloud_cover_to_pct(value: float | None) -> float | None:
+    """将云量从比例值 [0,1] 转换为百分比 [0,100]。
+
+    当值 > 1.5 时认为已经是百分比，直接返回。
+
+    Args:
+        value: 原始云量值
+
+    Returns:
+        百分比云量值，输入为 None 或 NaN 时返回 None
+    """
     if value is None or math.isnan(value):
         return None
     return value * 100.0 if value <= 1.5 else value
@@ -246,16 +356,26 @@ def extract_hrrr_point_sample(
     latitude: float,
     longitude: float,
 ) -> HrrrPointSample:
-    """Extract a strict point-weather sample from one HRRR GRIB2 forecast file.
+    """从单个 HRRR GRIB2 预报文件提取严格点天气样本。
 
-    Variables are selected conservatively:
-    - `t2m`, `r2`, `u10`, `v10`, `tp`, `tcc`, `sdswrf`, `sp`
-    - wind speed is derived from `u10` and `v10`
-    - issue/valid time are preserved from the GRIB coordinates
+    变量保守选取：
+    - t2m、r2、u10、v10、tp、tcc、sdswrf、sp
+    - 风速由 u10 和 v10 合成
+    - 起报时间/有效时间从 GRIB 坐标保留
 
-    This is enough to prove the strict-weather chain can reach the same core
-    weather features already used by the project, while keeping the first HRRR
-    implementation small and testable.
+    这足以证明严格天气链路能覆盖项目已使用的核心天气特征，
+    同时保持首次 HRRR 实现小且可测试。
+
+    Args:
+        grib_path: GRIB2 文件路径
+        latitude: 请求纬度
+        longitude: 请求经度
+
+    Returns:
+        HrrrPointSample 包含提取的 DataFrame 和元数据
+
+    Raises:
+        ValueError: 缺少必需变量时抛出
     """
 
     datasets = _open_hrrr_datasets(grib_path)
@@ -337,7 +457,15 @@ def extract_hrrr_point_sample(
 
 
 def build_hrrr_cycle_urls(*, valid_time: pd.Timestamp, lead_time_hour: int) -> tuple[str, str, str]:
-    """Build the GRIB2, idx, and cache stem for one strict HRRR forecast sample."""
+    """构建单个 HRRR 预报样本的 GRIB2 URL、idx URL 和缓存主干名。
+
+    Args:
+        valid_time: 有效时间（UTC）
+        lead_time_hour: 预报提前时间（小时）
+
+    Returns:
+        元组 (GRIB2 URL, idx URL, 缓存主干名)
+    """
 
     if valid_time.tzinfo is None:
         valid_time = valid_time.tz_localize("UTC")
@@ -368,11 +496,22 @@ def build_hrrr_monthly_point_table(
     cache_dir: Path,
     timeout_seconds: int = 120,
 ) -> pd.DataFrame:
-    """Build a strict HRRR point-weather table for a fixed lead time.
+    """构建固定提前时间的月度 HRRR 点天气表。
 
-    The pilot intentionally keeps lead time fixed across the whole month. That
-    yields one auditable weather table and is enough to validate alignment with
-    Stage1-3 before adding mixed `f01/f06/f24` logic.
+    试点阶段故意保持整个月使用固定提前时间。这样产生一个可审计的天气表，
+    足以在与 Stage1-3 对齐验证后再添加混合 f01/f06/f24 逻辑。
+
+    Args:
+        start: 起始日期字符串（含时区）
+        end: 结束日期字符串（含时区）
+        latitude: 请求纬度
+        longitude: 请求经度
+        lead_time_hour: 固定预报提前时间（小时）
+        cache_dir: GRIB 子集缓存目录
+        timeout_seconds: HTTP 请求超时秒数
+
+    Returns:
+        按 timestamp 排序且去重的月度天气 DataFrame
     """
 
     start_ts = pd.Timestamp(start, tz="UTC")

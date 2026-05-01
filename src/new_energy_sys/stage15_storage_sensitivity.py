@@ -1,3 +1,14 @@
+"""储能配置与目标函数敏感性分析模块。
+
+模块设计原则：
+- 网格扫描参数必须显式、可复现，不接受空项或非数值静默降级
+- 任何配置非法直接失败而非跳过，保证网格覆盖度和报告结论可审计
+- 调度决策只读取 prediction_kw，结算使用 actual_kw，保持与 Stage9-12 同口径边界
+- Pareto 前沿标记帮助展示多目标权衡空间，不等价于直接推荐上线
+
+本模块对应项目 Stage15 的储能配置与目标函数敏感性分析功能。
+"""
+
 from __future__ import annotations
 
 import json
@@ -17,9 +28,10 @@ from new_energy_sys.storage import _bounded_power, _constraint_summary, _prepare
 class Stage15SensitivityResult:
     """Stage15 储能配置与目标函数敏感性分析产物容器。
 
-    `results` 保存逐小时调度明细，适合后续画 SOC 曲线或抽查单个配置。
-    `metrics` 保存配置级指标，是论文表格和 Pareto 对比的主入口。
-    `report` 保存质量门禁、推荐结论和产物路径，便于交接时不用解析 Markdown。
+    Attributes:
+        results: 逐小时调度明细，适合后续画 SOC 曲线或抽查单个配置
+        metrics: 配置级指标，是论文表格和 Pareto 对比的主入口
+        report: 质量门禁、推荐结论和产物路径，便于交接时不用解析 Markdown
     """
 
     results: pd.DataFrame
@@ -28,10 +40,21 @@ class Stage15SensitivityResult:
 
 
 def _parse_float_list(value: str | None, *, default: list[float], name: str) -> list[float]:
-    """解析 CLI 传入的逗号分隔数值列表。
+    """解析命令行传入的逗号分隔数值列表。
 
-    Stage15 的网格参数必须显式、可复现。这里不接受空项或非数值，避免把拼写错误
-    静默降级成默认网格，导致报告中的敏感性范围与实际执行不一致。
+    Stage15 的网格参数必须显式、可复现。这里不接受空项或非数值，
+    避免把拼写错误静默降级成默认网格，导致报告中的敏感性范围与实际执行不一致。
+
+    Args:
+        value: 命令行传入的逗号分隔字符串，None 或空串则使用默认值
+        default: 当 value 为空时使用的默认数值列表
+        name: 参数名称，用于错误提示
+
+    Returns:
+        解析后的浮点数列表
+
+    Raises:
+        ValueError: 包含空项或非数值时抛出
     """
 
     if value is None or value.strip() == "":
@@ -53,6 +76,15 @@ def _validate_storage_config(config: dict[str, Any]) -> None:
 
     敏感性扫描会自动生成多组配置。任何一组配置非法都直接失败，而不是跳过，
     因为跳过会让网格覆盖度和报告结论变得不可审计。
+
+    Args:
+        config: 储能配置字典，须包含 capacity_kwh、max_charge_kw、max_discharge_kw、
+                charge_efficiency、discharge_efficiency、soc_min、soc_initial、
+                soc_max、terminal_soc_target
+
+    Raises:
+        ValueError: 容量非正、功率非正、效率不在 (0,1]、SOC 边界不合理、
+                    terminal_soc_target 超出 SOC 范围时抛出
     """
 
     capacity_kwh = float(config["capacity_kwh"])
@@ -87,8 +119,18 @@ def _build_configuration_grid(
     """生成 Stage15 默认敏感性配置网格。
 
     网格设计遵循两个约束：
-    - 至少覆盖 3 档容量和 3 档功率，满足交接锚点的最低验收标准。
-    - 目标函数惩罚项按 preset 成组变化，避免 3x3x3x3 的无边界爆炸。
+    - 至少覆盖 3 档容量和 3 档功率，满足交接锚点的最低验收标准
+    - 目标函数惩罚项按 preset 成组变化，避免 3x3x3x3 的无边界爆炸
+
+    Args:
+        base_storage: 基准储能配置字典
+        capacity_multipliers: 容量倍率列表
+        power_multipliers: 功率倍率列表
+        objective_presets: 目标函数惩罚项预设列表
+
+    Returns:
+        配置列表，每项包含 config_id、capacity_multiplier、power_multiplier、
+        objective_preset 和 storage_config
     """
 
     base_capacity = float(base_storage["capacity_kwh"])
@@ -137,10 +179,19 @@ def _objective_presets(
     terminal_penalties: list[float],
     terminal_soc_target: float,
 ) -> list[dict[str, float]]:
-    """把目标函数参数压缩成可解释的低/中/高三档 preset。
+    """把目标函数参数压缩成可解释的低/中/高三档预设。
 
     如果用户只传入一个值，三档都会复用该值；如果传入多个值，则分别取低、中、高。
     这种方式确保 Stage15 同时扫描三类惩罚项，又不会让配置数量失控。
+
+    Args:
+        cycle_costs: 循环成本候选值列表
+        shortfall_penalties: 短缺惩罚候选值列表
+        terminal_penalties: 末端 SOC 惩罚候选值列表
+        terminal_soc_target: 末端 SOC 目标值
+
+    Returns:
+        长度为 3 的预设列表，分别对应低/中/高三档
     """
 
     def pick(values: list[float], index: int) -> float:
@@ -172,10 +223,19 @@ def _stage15_first_action(
 ) -> dict[str, float]:
     """在当前 24h 窗口内生成首小时调度动作。
 
-    该策略继承 Stage12 的 rolling look-ahead 信息边界，但显式让三类惩罚项都参与：
-    - `cycle_cost` 和 `shortfall_risk_penalty` 提高套利所需价差；
-    - `terminal_soc_penalty` 收紧或放宽 SOC 回归死区；
-    - `terminal_soc_target` 定义策略希望维持的长期能量水平。
+    该策略继承 Stage12 的滚动前瞻信息边界，但显式让三类惩罚项都参与：
+    - cycle_cost 和 shortfall_risk_penalty 提高套利所需价差
+    - terminal_soc_penalty 收紧或放宽 SOC 回归死区
+    - terminal_soc_target 定义策略希望维持的长期能量水平
+
+    Args:
+        window: 当前前瞻窗口数据
+        current_soc: 当前荷电状态
+        capacity_kw: 电站装机容量 (kW)
+        storage_config: 储能配置字典
+
+    Returns:
+        包含 charge_kw、discharge_kw、planned_objective_eur 的字典
     """
 
     if window.empty:
@@ -223,7 +283,7 @@ def _stage15_first_action(
     )
 
     # terminal penalty 越大，SOC 越不允许长期偏离目标。这里用惩罚系数压缩死区：
-    # 0.005 左右表示宽松，0.02 为 Stage12 默认，0.05 则显著偏保守。
+    # 0.005 左右表示宽松，0.02 为 Stage12 默认，0.05 则显著偏保守
     soc_deadband = float(np.clip(0.08 - terminal_penalty, 0.02, 0.08))
     if not should_charge and not should_discharge:
         if current_soc < terminal_target - soc_deadband and price <= median_price:
@@ -255,8 +315,18 @@ def _simulate_stage15_configuration(
 ) -> pd.DataFrame:
     """对单个参数配置执行滚动调度回放。
 
-    结算仍使用 `actual_kw`，决策只读取 `prediction_kw` 和已对齐电价；这样保持
+    结算仍使用 actual_kw，决策只读取 prediction_kw 和已对齐电价；这样保持
     Stage9-Stage12 的同口径边界，避免把真实发电泄漏进计划动作。
+
+    Args:
+        frame: 调度输入数据帧
+        storage_config: 储能配置字典
+        capacity_kw: 电站装机容量 (kW)
+        lookahead_hours: 前瞻窗口小时数
+        config_id: 配置标识符
+
+    Returns:
+        逐小时调度明细 DataFrame，包含 SOC、充放电、收益等字段
     """
 
     capacity_kwh = float(storage_config["capacity_kwh"])
@@ -346,7 +416,18 @@ def _configuration_metrics(
     config_id: str,
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
-    """生成单个配置的配置级指标。"""
+    """生成单个配置的配置级指标。
+
+    Args:
+        scenario_rows: 单个配置的逐小时调度明细
+        storage_config: 储能配置字典
+        capacity_kw: 电站装机容量 (kW)
+        config_id: 配置标识符
+        metadata: 包含 capacity_multiplier、power_multiplier、objective_preset 的元数据
+
+    Returns:
+        配置级指标字典，包含收益、循环、短缺、弃光、SOC 等汇总
+    """
 
     constraints = _constraint_summary(scenario_rows, storage_config)
     total_charge_kwh = float(scenario_rows["actual_charge_kw"].sum())
@@ -397,7 +478,13 @@ def _mark_pareto(metrics: pd.DataFrame) -> pd.DataFrame:
     """标记 Pareto 前沿配置。
 
     目标方向：收益越高越好；循环、短缺、弃光、SOC 贴边越低越好。该前沿不直接
-    等价于“推荐上线”，而是帮助论文展示多目标权衡空间。
+    等价于"推荐上线"，而是帮助论文展示多目标权衡空间。
+
+    Args:
+        metrics: 配置级指标 DataFrame
+
+    Returns:
+        增加 pareto_front 布尔列后的 DataFrame
     """
 
     working = metrics.copy()
@@ -427,7 +514,14 @@ def _mark_pareto(metrics: pd.DataFrame) -> pd.DataFrame:
 
 
 def _all_constraints_pass(metrics: pd.DataFrame) -> bool:
-    """判断所有配置是否通过核心物理约束门禁。"""
+    """判断所有配置是否通过核心物理约束门禁。
+
+    Args:
+        metrics: 配置级指标 DataFrame
+
+    Returns:
+        所有配置全部通过约束时返回 True
+    """
 
     gates = [
         "soc_within_bounds",
@@ -454,7 +548,25 @@ def run_stage15_storage_sensitivity(
     terminal_soc_target: float | None = None,
     output_paths: dict[str, Path] | None = None,
 ) -> Stage15SensitivityResult:
-    """运行 Stage15 储能配置与目标函数敏感性分析。"""
+    """运行 Stage15 储能配置与目标函数敏感性分析。
+
+    Args:
+        predictions: Stage9 预测产物 DataFrame
+        feature_frame: Stage3 特征数据帧
+        config: 全局配置字典，须包含 site.capacity_kw 和 storage 子项
+        horizon_hours: 预测 horizon 小时数，默认 24
+        lookahead_hours: 滚动前瞻窗口小时数，默认 24
+        capacity_multipliers: 容量倍率网格，默认 [0.5, 1.0, 1.5]
+        power_multipliers: 功率倍率网格，默认 [0.5, 1.0, 1.5]
+        cycle_costs: 循环成本候选值，默认 [0.001, 0.002, 0.004]
+        shortfall_penalties: 短缺惩罚候选值，默认 [0.0005, 0.001, 0.003]
+        terminal_penalties: 末端 SOC 惩罚候选值，默认 [0.005, 0.02, 0.05]
+        terminal_soc_target: 末端 SOC 目标，默认取 base_storage 配置
+        output_paths: 输出路径字典
+
+    Returns:
+        Stage15SensitivityResult 包含 results、metrics、report 三部分
+    """
 
     capacity_kw = float(config["site"]["capacity_kw"])
     base_storage = dict(config["storage"])
@@ -563,13 +675,24 @@ def run_stage15_storage_sensitivity(
 
 
 def write_stage15_json(report: dict[str, Any], path: Path) -> None:
-    """写出 Stage15 机器可读 JSON 报告。"""
+    """写出 Stage15 机器可读 JSON 报告。
+
+    Args:
+        report: Stage15 报告字典
+        path: 输出文件路径
+    """
 
     path.write_text(json.dumps(_json_safe(report), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
 
 
 def write_stage15_report(report: dict[str, Any], metrics: pd.DataFrame, path: Path) -> None:
-    """写出 Stage15 中文 Markdown 报告。"""
+    """写出 Stage15 中文 Markdown 报告。
+
+    Args:
+        report: Stage15 报告字典
+        metrics: 配置级指标 DataFrame
+        path: 输出文件路径
+    """
 
     best = report["best_revenue_config"]
     recommended = report["recommended_pareto_config"]

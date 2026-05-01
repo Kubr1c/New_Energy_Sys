@@ -1,3 +1,15 @@
+"""两级预报气象源升级准备模块。
+
+模块设计原则：
+- Level 1：Open-Meteo 历史预报，可执行的短期路径
+- Level 2：NOAA HRRR，预留的高分辨率工程路径（暂不下载数据）
+- 输出归一化预报气象 parquet、质量摘要、HRRR 合约清单及升级报告
+
+本模块对应项目 Stage 7 前置的预报气象源升级准备功能。
+
+入口命令: new-energy-sys prepare-forecast-weather --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -14,17 +26,17 @@ from new_energy_sys.standardize import normalize_weather
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the two-level forecast-weather upgrade."""
+    """解析预报气象两级升级命令行参数。"""
 
     parser = argparse.ArgumentParser(
-        description="Prepare stronger forecast-weather sources for PV forecasting upgrades."
+        description="准备更高质量的预报气象源以支持光伏预测升级。"
     )
-    parser.add_argument("--config", required=True, help="Path to forecast-weather upgrade JSON config.")
+    parser.add_argument("--config", required=True, help="预报气象升级 JSON 配置文件路径。")
     return parser.parse_args()
 
 
 def _safe_time(value: Any) -> str | None:
-    """Convert pandas/numpy timestamps into report-friendly strings."""
+    """将 pandas/numpy 时间戳转为报告友好的字符串。"""
 
     if pd.isna(value):
         return None
@@ -32,12 +44,10 @@ def _safe_time(value: Any) -> str | None:
 
 
 def _quality_summary(frame: pd.DataFrame, *, expected_start: str, expected_end: str) -> dict[str, Any]:
-    """Build deterministic QA metrics for the downloaded forecast-weather table.
+    """为下载的预报气象表构建确定性质量指标。
 
-    This deliberately mirrors the Stage2 quality style: row count, hourly
-    coverage, missingness, and physical weather-field availability. The output
-    is small enough to be inspected by humans and stable enough to compare
-    across later provider swaps.
+    刻意对齐 Stage 2 质量风格：行数、小时覆盖率、缺失率及物理气象字段可用性。
+    输出足够小便于人工检查，足够稳定便于跨数据源横向比较。
     """
 
     working = frame.copy()
@@ -80,12 +90,11 @@ def _quality_summary(frame: pd.DataFrame, *, expected_start: str, expected_end: 
 
 
 def _hrrr_manifest(config: dict[str, Any]) -> dict[str, Any]:
-    """Return the level-2 HRRR acquisition contract without downloading GRIB data.
+    """生成 Level 2 HRRR 采集合约清单（不下载 GRIB 数据）。
 
-    HRRR is materially heavier than Open-Meteo: hourly model cycles, lead-time
-    files, GRIB2/Zarr parsing, and point extraction. This manifest defines the
-    production-grade contract now, so the next implementation can add a concrete
-    extractor without changing downstream feature names.
+    HRRR 比 Open-Meteo 重得多：逐小时模型周期、lead-time 文件、
+    GRIB2/Zarr 解析与站点提取。此清单提前定义生产级合约，
+    后续实现具体提取器时无需修改下游特征名。
     """
 
     hrrr = config["sources"].get("level_2_weather", {})
@@ -117,7 +126,7 @@ def _hrrr_manifest(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _write_markdown_report(report: dict[str, Any], path: Path) -> None:
-    """Write a concise markdown report for the two-level weather upgrade."""
+    """写入两级气象升级的简洁 Markdown 报告。"""
 
     quality = report["level_1_open_meteo"]["quality"]
     gates = quality["quality_gates"]

@@ -11,6 +11,8 @@ async function login(page, account = ADMIN) {
   await page.getByRole('button', { name: /Sign In/ }).click()
   await expect(page).toHaveURL(/#\/$/)
   await expect(page.locator('body')).toContainText('PV', { timeout: 30_000 })
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible()
+  await expect(page.locator('header')).toContainText('预测监控')
 }
 
 async function expectRouteMarker(page, route, marker) {

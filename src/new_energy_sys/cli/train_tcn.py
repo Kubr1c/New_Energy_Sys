@@ -1,3 +1,15 @@
+"""TCN 时序模型训练模块。
+
+模块设计原则：
+- 对 Stage 3 特征数据集训练时序卷积网络（TCN）预测模型
+- 支持多窗口、多目标、多特征组与多模型配置的网格实验
+- 泄漏安全：严格按时间切分训练/验证/测试集
+
+本模块对应项目 Stage 6 的 TCN 时序建模功能。
+
+入口命令: new-energy-sys train-tcn --config <path> --input <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,48 +23,47 @@ from new_energy_sys.sequence_modeling import run_tcn_experiments, write_tcn_repo
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for TCN sequence modeling."""
+    """解析 Stage 6 TCN 时序建模命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Run leakage-safe TCN sequence modeling.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
-    parser.add_argument("--input", required=True, help="Stage3 feature dataset path relative to project root.")
+    parser = argparse.ArgumentParser(description="执行泄漏安全的 TCN 时序建模。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
+    parser.add_argument("--input", required=True, help="Stage 3 特征数据集路径（相对于项目根目录）。")
     parser.add_argument(
         "--baseline-metrics",
         default=None,
-        help="Optional tuned LightGBM metrics CSV path relative to project root for comparison.",
+        help="可选：调优后 LightGBM 指标 CSV 路径（相对于项目根目录），用于对比。",
     )
     parser.add_argument(
         "--windows",
         default="24,48,72",
-        help="Comma-separated sequence window sizes in hours.",
+        help="逗号分隔的序列窗口大小（小时）。",
     )
     parser.add_argument(
         "--targets",
         default=None,
         help=(
-            "Optional comma-separated targets. Supports full target column names "
-            "or short horizon aliases: 1h, 6h, 24h."
+            "可选：逗号分隔的目标列名或短别名（1h, 6h, 24h）。"
         ),
     )
     parser.add_argument(
         "--feature-set",
         default="all",
         choices=["all", "weather_history", "weather_history_target_aligned"],
-        help="TCN feature group. Use weather_history to exclude load, price, storage, and calendar noise.",
+        help="TCN 特征组。weather_history 排除负荷、价格、储能和日历噪声。",
     )
     parser.add_argument(
         "--tcn-configs",
         default="baseline",
-        help="Comma-separated lightweight TCN configs: baseline, compact, regularized.",
+        help="逗号分隔的轻量 TCN 配置名：baseline, compact, regularized。",
     )
-    parser.add_argument("--max-epochs", type=int, default=20, help="Maximum training epochs per TCN model.")
-    parser.add_argument("--patience", type=int, default=4, help="Validation early-stopping patience.")
-    parser.add_argument("--batch-size", type=int, default=256, help="Training and inference batch size.")
+    parser.add_argument("--max-epochs", type=int, default=20, help="每个 TCN 模型最大训练轮数。")
+    parser.add_argument("--patience", type=int, default=4, help="验证集早停耐心值。")
+    parser.add_argument("--batch-size", type=int, default=256, help="训练与推理批次大小。")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Train TCN models and persist metrics, predictions, models, and report."""
+    """训练 TCN 模型并落盘指标、预测、模型与报告。"""
 
     args = parse_args()
     runtime = load_config(args.config)

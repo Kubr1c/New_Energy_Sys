@@ -19,3 +19,11 @@ frontend/dist/
 frontend/dist-ssr/
 frontend/playwright-report/
 frontend/test-results/
+
+# Large/local report attachments should be stored outside Git or in release assets.
+reports/*.mp4
+reports/*.webm
+reports/*.doc
+reports/*.docx
+reports/*.pdf
+reports/*.html

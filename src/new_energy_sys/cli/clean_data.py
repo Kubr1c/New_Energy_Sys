@@ -1,3 +1,15 @@
+"""数据清洗与质量验证模块。
+
+模块设计原则：
+- 对 Stage 1 小时级训练表执行缺失值填充、异常值检测、时间对齐
+- 输出清洗后数据集、标准化特征数据集及质量报告
+- 产物为 processed_dir 下的 parquet / CSV / JSON / Markdown
+
+本模块对应项目 Stage 2 的数据清洗与质量验证功能。
+
+入口命令: new-energy-sys clean-data --config <path>
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,17 +23,20 @@ import pandas as pd
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run stage-2 data cleaning and quality validation.")
-    parser.add_argument("--config", required=True, help="Path to JSON data source configuration.")
+    """解析 Stage 2 命令行参数。"""
+
+    parser = argparse.ArgumentParser(description="执行 Stage 2 数据清洗与质量验证。")
+    parser.add_argument("--config", required=True, help="JSON 数据源配置文件路径。")
     parser.add_argument(
         "--input",
         default="data/processed/hourly_training_with_storage.parquet",
-        help="Stage-1 hourly dataset path relative to project root.",
+        help="Stage 1 小时级数据集路径（相对于项目根目录）。",
     )
     return parser.parse_args()
 
 
 def main() -> None:
+    """执行 Stage 2 核心逻辑：清洗 → 标准化 → 质量报告 → 落盘产物。"""
     args = parse_args()
     runtime = load_config(args.config)
     processed_dir = ensure_dir(runtime.processed_dir)

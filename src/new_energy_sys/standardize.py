@@ -1,3 +1,18 @@
+"""数据标准化模块。
+
+本模块负责将不同来源的原始数据文件统一为项目内部的标准 schema，
+是数据采集（data_sources.py）与下游特征工程/建模之间的桥梁。
+
+模块设计原则：
+  - schema 稳定：所有输出 DataFrame 使用统一列名（timestamp、pv_power_kw 等），
+    下游特征工程和建模代码不依赖任何特定数据源的原始列名。
+  - 配置驱动：列名候选列表和单位换算规则来自 JSON 配置，而非硬编码。
+  - 物理护栏：光伏功率裁剪到 [0, 装机容量×1.2] 区间，防止异常值污染训练集。
+  - 丢行透明：所有 dropna 操作均在标准化阶段完成，而非在下游静默丢弃。
+
+本模块对应项目 Stage 2 的数据标准化功能。
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +24,22 @@ import pandas as pd
 
 
 def _first_existing_column(columns: Iterable[str], candidates: list[str], label: str) -> str:
-    """Return the first candidate column found in a source table."""
+    """在源表列名中查找第一个匹配的候选列名。
+
+    不同数据源的列名各不相同，配置中声明一组候选名称，
+    此函数返回第一个在源表中出现的候选列。
+
+    Args:
+        columns: 源表的所有列名。
+        candidates: 按优先级排列的候选列名列表。
+        label: 列用途的中文标签，仅用于错误提示。
+
+    Returns:
+        第一个在源表中存在的候选列名。
+
+    Raises:
+        ValueError: 所有候选列均未找到时抛出。
+    """
 
     column_set = set(columns)
     for candidate in candidates:
@@ -19,17 +49,34 @@ def _first_existing_column(columns: Iterable[str], candidates: list[str], label:
 
 
 def _read_csv(path: Path, max_rows: int | None = None) -> pd.DataFrame:
-    """Read CSV with optional row cap for large public datasets."""
+    """读取 CSV 文件，可选限制行数以应对大型公开数据集。
+
+    Args:
+        path: CSV 文件路径。
+        max_rows: 最大读取行数，None 表示不限制。
+
+    Returns:
+        读取得到的 DataFrame。
+    """
 
     return pd.read_csv(path, nrows=max_rows, low_memory=False)
 
 
 def normalize_pv_power(path: Path, source_config: dict, capacity_kw: float) -> pd.DataFrame:
-    """Normalize PV power data to timestamp + pv_power_kw.
+    """将光伏功率数据标准化为 timestamp + pv_power_kw 的统一 schema。
 
-    Public PV datasets are not schema-stable: timestamp and power columns differ
-    across systems. The config therefore declares candidate column names, and
-    this function picks the first available one.
+    公开光伏数据集的 schema 不稳定：时间戳和功率列名因系统而异。
+    因此配置中声明候选列名，此函数取第一个可用的列。
+    功率单位根据配置自动换算为 kW，并裁剪到物理合理范围。
+
+    Args:
+        path: 原始 CSV 文件路径。
+        source_config: 该数据源的配置字典，须包含
+            timestamp_candidates、power_candidates，可选 power_unit、max_rows。
+        capacity_kw: 装机容量（kW），用于物理护栏的上界裁剪。
+
+    Returns:
+        包含 timestamp（UTC）和 pv_power_kw 两列的 DataFrame。
     """
 
     frame = _read_csv(path, source_config.get("max_rows"))
@@ -59,24 +106,30 @@ def normalize_pv_power(path: Path, source_config: dict, capacity_kw: float) -> p
     )
     output = output.dropna(subset=["timestamp", "pv_power_kw"])
 
-    # Physical guardrail: PV output cannot be negative and should not exceed a
-    # generous upper bound of installed capacity. The 1.2 factor keeps temporary
-    # metadata mismatch from deleting useful samples during early exploration.
+    # 物理护栏：光伏出力不可为负，且不应超过装机容量的合理上界。
+    # 1.2 倍因子容许早期探索阶段元数据暂不匹配时保留有用样本。
     output["pv_power_kw"] = output["pv_power_kw"].clip(lower=0, upper=capacity_kw * 1.2)
     return output.sort_values("timestamp")
 
 
 def normalize_nrel_solar_zip(path: Path, source_config: dict) -> pd.DataFrame:
-    """Normalize NREL Solar Integration actual/forecast files.
+    """标准化 NREL Solar Integration 实际出力/预测 ZIP 文件。
 
-    The NREL state ZIP contains aligned files:
-    - Actual_*_5_Min.csv: measured/simulated actual PV output;
-    - DA_*_60_Min.csv: day-ahead forecast PV output;
-    - HA4_*_60_Min.csv: four-hour-ahead forecast PV output.
+    NREL 州级 ZIP 包含对齐的文件：
+      - Actual_*_5_Min.csv：实测/模拟实际光伏出力；
+      - DA_*_60_Min.csv：日前（Day-Ahead）预测光伏出力；
+      - HA4_*_60_Min.csv：4 小时前预测光伏出力。
 
-    The actual 5-minute output is resampled to hourly mean, then joined with DA
-    and HA4 forecasts. The result is a continuous hourly table suitable for the
-    main forecasting experiment.
+    实际 5 分钟出力重采样为小时均值后，与 DA 和 HA4 预测按时间戳
+    左连接合并，产出连续的小时级表格供主预测实验使用。
+
+    Args:
+        path: ZIP 文件路径。
+        source_config: 该数据源的配置字典，须包含 actual_member、capacity_mw；
+            可选 day_ahead_member、hour_ahead_member、timezone。
+
+    Returns:
+        包含 timestamp、pv_power_kw 及可选预测列的小时级 DataFrame。
     """
 
     actual_member = source_config["actual_member"]
@@ -98,6 +151,7 @@ def normalize_nrel_solar_zip(path: Path, source_config: dict) -> pd.DataFrame:
         ).dropna(subset=["timestamp", output_column])
 
     actual = read_member(actual_member, "pv_power_kw")
+    # 实际出力从 5 分钟重采样为小时均值
     actual_hourly = actual.set_index("timestamp").resample("1h").mean(numeric_only=True).reset_index()
 
     merged = actual_hourly
@@ -108,6 +162,7 @@ def normalize_nrel_solar_zip(path: Path, source_config: dict) -> pd.DataFrame:
         ha4 = read_member(ha4_member, "pv_forecast_ha4_kw")
         merged = merged.merge(ha4, on="timestamp", how="left")
 
+    # 按配置中装机容量裁剪所有功率列，1.05 倍容许测量误差
     capacity_kw = float(source_config["capacity_mw"]) * 1000.0
     power_columns = [column for column in merged.columns if column.endswith("_kw")]
     for column in power_columns:
@@ -117,18 +172,25 @@ def normalize_nrel_solar_zip(path: Path, source_config: dict) -> pd.DataFrame:
 
 
 def normalize_weather(path: Path) -> pd.DataFrame:
-    """Normalize weather fields to model-friendly names.
+    """将天气字段标准化为模型友好的统一列名。
 
-    Supports both Open-Meteo/ERA5 CSV files and NSRDB PSM CSV files. NSRDB
-    files contain two metadata rows before the actual header; Open-Meteo files
-    are regular one-header CSV files. The output schema is intentionally stable
-    so downstream cleaning and feature engineering do not depend on provider
-    naming conventions.
+    同时支持 Open-Meteo/ERA5 CSV 文件和 NSRDB PSM CSV 文件。
+    NSRDB 文件在真实列头之前有两行元数据；Open-Meteo 文件为常规单行头 CSV。
+    输出 schema 刻意保持稳定，使下游清洗和特征工程不依赖数据提供方的命名惯例。
+
+    Args:
+        path: 天气 CSV 文件路径（Open-Meteo 或 NSRDB 格式）。
+
+    Returns:
+        标准化列名的天气 DataFrame，timestamp 列为 UTC 时区。
     """
 
+    # 通过首行内容判断文件格式：NSRDB 首行含 "Source" 和 "Location"
     first_line = path.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
     if "Source" in first_line and "Location" in first_line:
+        # NSRDB PSM 格式：跳过前 2 行元数据
         frame = pd.read_csv(path, skiprows=2, low_memory=False)
+        # NSRDB 的 Year/Month/Day/Hour/Minute 列拼接为 UTC 时间戳
         base_date = pd.to_datetime(
             {
                 "year": pd.to_numeric(frame["Year"], errors="coerce"),
@@ -141,6 +203,7 @@ def normalize_weather(path: Path) -> pd.DataFrame:
         hour = pd.to_numeric(frame["Hour"], errors="coerce").fillna(0)
         minute = pd.to_numeric(frame["Minute"], errors="coerce").fillna(0)
         frame["timestamp"] = base_date + pd.to_timedelta(hour, unit="h") + pd.to_timedelta(minute, unit="m")
+        # NSRDB 原始列名映射为标准列名
         output = frame.rename(
             columns={
                 "GHI": "ghi_wm2",
@@ -164,6 +227,7 @@ def normalize_weather(path: Path) -> pd.DataFrame:
                 "Precipitable Water": "precipitable_water_cm",
             }
         )
+        # 只保留标准列名中实际存在的列
         keep = [
             "timestamp",
             "ghi_wm2",
@@ -185,13 +249,16 @@ def normalize_weather(path: Path) -> pd.DataFrame:
             "precipitable_water_cm",
         ]
         existing = [column for column in keep if column in output.columns]
+        # 将非时间戳列转为数值类型
         for column in existing:
             if column != "timestamp":
                 output[column] = pd.to_numeric(output[column], errors="coerce")
         return output[existing].dropna(subset=["timestamp"]).sort_values("timestamp")
 
+    # Open-Meteo / ERA5 常规格式：单行头 CSV
     frame = _read_csv(path)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    # Open-Meteo 原始列名映射为标准列名
     output = frame.rename(
         columns={
             "temperature_2m": "temperature_c",
@@ -215,18 +282,27 @@ def normalize_weather(path: Path) -> pd.DataFrame:
             "weather_forecast_lead_time_hour": "weather_forecast_lead_time_hour",
         }
     )
+    # 去除重复列（direct_radiation 和 direct_normal_irradiance 均映射为 dni_wm2）
     if output.columns.duplicated().any():
         output = output.loc[:, ~output.columns.duplicated()]
     return output.dropna(subset=["timestamp"]).sort_values("timestamp")
 
 
 def derive_weather_from_pv(path: Path, pv_source_config: dict, weather_config: dict) -> pd.DataFrame:
-    """Derive weather-like fields from a PVDAQ/DuraMAT PV source file.
+    """从 PVDAQ/DuraMAT 光伏源文件中提取类天气字段。
 
-    Some PVDAQ public subsets already contain irradiance, ambient temperature,
-    and wind speed. Reusing these columns is more robust for the first project
-    milestone than joining a separate weather source that may not overlap in
-    time with the selected PV station.
+    部分 PVDAQ 公开子集已包含辐照度、环境温度和风速。对于首个项目里程碑，
+    复用这些列比单独关联一个时间范围可能不重叠的天气源更稳健。
+
+    Args:
+        path: 光伏原始 CSV 文件路径。
+        pv_source_config: 光伏数据源配置字典，须包含 timestamp_candidates；
+            可选 max_rows。
+        weather_config: 天气字段映射配置字典，须包含 field_map，
+            key 为源列名、value 为标准列名。
+
+    Returns:
+        标准化列名的天气 DataFrame。
     """
 
     frame = _read_csv(path, pv_source_config.get("max_rows"))
@@ -241,6 +317,7 @@ def derive_weather_from_pv(path: Path, pv_source_config: dict, weather_config: d
             "timestamp": pd.to_datetime(frame[timestamp_col], errors="coerce", utc=True),
         }
     )
+    # 按 field_map 逐列映射源列到标准列名，同一目标列取首次非空值
     for source_col, target_col in weather_config.get("field_map", {}).items():
         if source_col in frame.columns:
             values = pd.to_numeric(frame[source_col], errors="coerce")
@@ -253,11 +330,18 @@ def derive_weather_from_pv(path: Path, pv_source_config: dict, weather_config: d
 
 
 def normalize_opsd(path: Path, source_config: dict) -> pd.DataFrame:
-    """Normalize OPSD load and price fields.
+    """标准化 OPSD（Open Power System Data）负荷和电价字段。
 
-    OPSD column availability changes across releases and countries. The project
-    starts with Germany/Luxembourg fields because they are commonly available in
-    the public package and are enough to drive an economic dispatch demo.
+    OPSD 列可用性因发布版本和国家而异。项目从德国/卢森堡字段起步，
+    因为它们在公开数据包中最常见，足以驱动经济调度演示。
+
+    Args:
+        path: OPSD 原始 CSV 文件路径。
+        source_config: 该数据源的配置字典，须包含 timestamp_candidates、
+            load_candidates、price_candidates；可选 max_rows。
+
+    Returns:
+        包含 timestamp、load_mw 和 price_eur_mwh 的 DataFrame。
     """
 
     frame = _read_csv(path, source_config.get("max_rows"))
@@ -268,6 +352,7 @@ def normalize_opsd(path: Path, source_config: dict) -> pd.DataFrame:
     )
     load_col = _first_existing_column(frame.columns, source_config["load_candidates"], "负荷")
 
+    # 电价列可能不存在，逐候选查找
     price_col = None
     for candidate in source_config["price_candidates"]:
         if candidate in frame.columns:
@@ -283,8 +368,8 @@ def normalize_opsd(path: Path, source_config: dict) -> pd.DataFrame:
     if price_col:
         output["price_eur_mwh"] = pd.to_numeric(frame[price_col], errors="coerce")
     else:
-        # Fallback price profile keeps the scheduling module runnable when OPSD
-        # lacks day-ahead price fields in the selected release.
+        # 兜底电价曲线：保证调度模块在 OPSD 缺少日前电价字段时仍可运行。
+        # 高峰时段（17-21 时）120 €/MWh，其余时段 50 €/MWh。
         hour = output["timestamp"].dt.hour
         output["price_eur_mwh"] = 50 + ((hour >= 17) & (hour <= 21)).astype(int) * 60
 
@@ -292,17 +377,25 @@ def normalize_opsd(path: Path, source_config: dict) -> pd.DataFrame:
 
 
 def map_opsd_profile_to_target_timeline(target: pd.DataFrame, opsd: pd.DataFrame) -> pd.DataFrame:
-    """Map OPSD load/price profiles onto the target PV timeline.
+    """将 OPSD 负荷/电价典型曲线映射到目标光伏时间轴。
 
-    NREL Solar Integration PV data is for 2006, while OPSD load/price data often
-    starts in 2015. To keep the dispatch module tied to real OPSD shapes without
-    pretending timestamps overlap, this function builds day-of-week/hour average
-    profiles from OPSD and projects them onto the NREL timestamps.
+    NREL Solar Integration 光伏数据为 2006 年，而 OPSD 负荷/电价数据
+    通常始于 2015 年。为使调度模块使用真实 OPSD 曲线形状而不假设时间戳
+    重叠，此函数从 OPSD 构建星期×小时平均曲线，再投影到 NREL 时间戳上。
+
+    Args:
+        target: 目标时间轴 DataFrame，须包含 timestamp 列。
+        opsd: 标准化后的 OPSD DataFrame，须包含 timestamp、load_mw、
+            price_eur_mwh 列。
+
+    Returns:
+        与 target 时间轴对齐的负荷/电价 DataFrame。
     """
 
     profile_source = opsd.dropna(subset=["load_mw", "price_eur_mwh"]).copy()
     profile_source["day_of_week"] = profile_source["timestamp"].dt.dayofweek
     profile_source["hour"] = profile_source["timestamp"].dt.hour
+    # 按 (星期, 小时) 分组计算 OPSD 负荷和电价均值
     profile = (
         profile_source.groupby(["day_of_week", "hour"], as_index=False)[["load_mw", "price_eur_mwh"]]
         .mean()
@@ -311,8 +404,10 @@ def map_opsd_profile_to_target_timeline(target: pd.DataFrame, opsd: pd.DataFrame
     mapped = pd.DataFrame({"timestamp": target["timestamp"].dropna().drop_duplicates()})
     mapped["day_of_week"] = mapped["timestamp"].dt.dayofweek
     mapped["hour"] = mapped["timestamp"].dt.hour
+    # 将典型曲线按 (星期, 小时) 匹配到目标时间轴
     mapped = mapped.merge(profile, on=["day_of_week", "hour"], how="left")
 
+    # 少数时段可能匹配不到（如 OPSD 数据缺失），用中位数填充
     for column in ["load_mw", "price_eur_mwh"]:
         if mapped[column].isna().any():
             mapped[column] = mapped[column].fillna(profile_source[column].median())
@@ -321,12 +416,20 @@ def map_opsd_profile_to_target_timeline(target: pd.DataFrame, opsd: pd.DataFrame
 
 
 def build_synthetic_market(index_source: pd.DataFrame, source_config: dict) -> pd.DataFrame:
-    """Create deterministic load and price curves aligned with the PV timeline.
+    """生成与光伏时间轴对齐的确定性负荷和电价曲线。
 
-    The first implementation needs an economically meaningful dispatch signal,
-    not a perfect market model. This function provides a reproducible profile:
-    valley prices at night, peak prices in the evening, and load following a
-    smooth daily cycle.
+    首个实现需要经济上有意义的调度信号，而非完美的市场模型。
+    此函数提供可复现的典型曲线：夜间低谷电价、晚间高峰电价，
+    负荷跟随平滑的日周期变化。
+
+    Args:
+        index_source: 提供时间轴的 DataFrame，须包含 timestamp 列。
+        source_config: 合成市场配置字典，须包含 base_load_mw、
+            daily_load_amplitude_mw、base_price_eur_mwh、
+            peak_price_eur_mwh、valley_price_eur_mwh。
+
+    Returns:
+        包含 timestamp、load_mw、price_eur_mwh 的 DataFrame。
     """
 
     timestamps = pd.DataFrame({"timestamp": index_source["timestamp"].dropna().drop_duplicates()})
@@ -339,8 +442,10 @@ def build_synthetic_market(index_source: pd.DataFrame, source_config: dict) -> p
     peak_price = float(source_config["peak_price_eur_mwh"])
     valley_price = float(source_config["valley_price_eur_mwh"])
 
+    # 负荷用余弦函数模拟日周期，峰值在 18 时
     daily_phase = (hour - 18) / 24 * 2 * np.pi
     timestamps["load_mw"] = base_load + amplitude * (1 + np.cos(daily_phase))
+    # 电价：0-6 时为低谷价，17-21 时为高峰价，其余为基础价
     timestamps["price_eur_mwh"] = base_price
     timestamps.loc[(hour >= 0) & (hour <= 6), "price_eur_mwh"] = valley_price
     timestamps.loc[(hour >= 17) & (hour <= 21), "price_eur_mwh"] = peak_price
@@ -353,7 +458,21 @@ def build_hourly_training_table(
     weather: pd.DataFrame,
     opsd: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Align all sources to one hourly UTC training table."""
+    """将所有数据源对齐为一张小时级 UTC 训练表。
+
+    光伏、天气、市场三张表分别重采样为小时均值后，按 timestamp
+    左连接合并。光伏功率列是监督学习标签，缺失该列的行将被移除；
+    天气/市场特征的短间隙通过前后向有限步填充和中位数填充处理。
+
+    Args:
+        pv_power: 标准化后的光伏功率 DataFrame（须含 timestamp、pv_power_kw）。
+        weather: 标准化后的天气 DataFrame（须含 timestamp 及气象列）。
+        opsd: 标准化后的负荷/电价 DataFrame（须含 timestamp、load_mw、
+            price_eur_mwh）。
+
+    Returns:
+        合并后的小时级训练表，包含时间特征列 hour、day_of_week、month。
+    """
 
     pv_hourly = (
         pv_power.set_index("timestamp")
@@ -377,20 +496,19 @@ def build_hourly_training_table(
     merged = pv_hourly.merge(weather_hourly, on="timestamp", how="left")
     merged = merged.merge(opsd_hourly, on="timestamp", how="left")
 
-    # The PV target is the supervised learning label. Rows without it are not
-    # valid training samples and must be removed before feature filling.
+    # 光伏功率是监督学习标签，缺失标签的行不是有效训练样本，必须移除
     merged = merged.dropna(subset=["pv_power_kw"]).copy()
 
-    # Weather and market fields can have short gaps after resampling or joining.
-    # Limit filling to adjacent rows so long outages remain visible during QA.
+    # 天气和市场字段在重采样/连接后可能有短间隙。
+    # 限制填充步数为 3，使长时间缺失在质量检查中仍然可见。
     feature_columns = [column for column in merged.columns if column not in {"timestamp", "pv_power_kw"}]
     merged[feature_columns] = merged[feature_columns].ffill(limit=3).bfill(limit=3)
+    # 有限步前后向填充仍无法覆盖的缺失值，用中位数兜底
     for column in feature_columns:
         if pd.api.types.is_numeric_dtype(merged[column]) and merged[column].isna().any():
             merged[column] = merged[column].fillna(merged[column].median())
 
-    # Time features are deterministic, leakage-free, and useful for both tree
-    # baselines and sequence models.
+    # 时间特征是确定性的、无泄漏风险的，对树基线和序列模型均有用
     merged["hour"] = merged["timestamp"].dt.hour
     merged["day_of_week"] = merged["timestamp"].dt.dayofweek
     merged["month"] = merged["timestamp"].dt.month
