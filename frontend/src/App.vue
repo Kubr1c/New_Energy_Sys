@@ -66,12 +66,12 @@ const currentTime = ref('')
 let timer = null
 
 const navItems = [
-  { path: '/', label: '预测监控 Overview', subtitle: 'PV forecast, site status, and model summary', icon: 'DataAnalysis' },
-  { path: '/models', label: '模型评估 Models', subtitle: 'Leaderboard and multi-metric comparison', icon: 'TrendCharts' },
-  { path: '/dispatch', label: '调度收益 Dispatch', subtitle: 'Storage strategy value and degradation replay', icon: 'Setting' },
-  { path: '/governance', label: '配置治理 Governance', subtitle: 'Sensitivity scan and Pareto selection', icon: 'Histogram' },
-  { path: '/data', label: '数据运维 Data', subtitle: 'Data quality, feature importance, and task runner', icon: 'DataLine' },
-  { path: '/reports', label: '报告归档 Reports', subtitle: 'Stage reports and experiment evidence', icon: 'Document' },
+  { path: '/', label: '系统总览', subtitle: '站点状态、预测曲线与主模型摘要', icon: 'DataAnalysis' },
+  { path: '/models', label: '模型评估', subtitle: '模型排行榜与多指标对比', icon: 'TrendCharts' },
+  { path: '/dispatch', label: '调度分析', subtitle: '储能策略收益、退化回放与治理评分', icon: 'Setting' },
+  { path: '/governance', label: '配置治理', subtitle: '容量功率敏感性与 Pareto 选择', icon: 'Histogram' },
+  { path: '/data', label: '数据管理', subtitle: '数据质量、特征重要性与任务触发', icon: 'DataLine' },
+  { path: '/reports', label: '实验报告', subtitle: '阶段报告与实验依据归档', icon: 'Document' },
 ]
 
 const showShell = computed(() => isAuthenticated.value && route.name !== 'Login')

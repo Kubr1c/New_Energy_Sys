@@ -62,6 +62,42 @@ def _read_csv(path: Path, max_rows: int | None = None) -> pd.DataFrame:
     return pd.read_csv(path, nrows=max_rows, low_memory=False)
 
 
+def _parse_source_timestamp(values: pd.Series, *, source_timezone: str | None) -> pd.Series:
+    """Parse source timestamps into UTC without applying a global offset.
+
+    PVDAQ System 10 exports ``measured_on`` as a naive local clock timestamp. If
+    pandas parses that value with ``utc=True`` directly, it treats local noon as
+    noon UTC instead of Denver-standard noon. That shifts PV peaks about seven
+    hours earlier than NSRDB irradiance and can make downstream models learn a
+    physically wrong time axis.
+
+    The fix is deliberately source-scoped. A configured ``timezone`` localizes
+    naive timestamps first, then converts them to UTC. Sources without that field
+    keep the historical UTC interpretation so unrelated pipelines remain stable.
+    """
+
+    if not source_timezone:
+        return pd.to_datetime(values, errors="coerce", utc=True)
+
+    try:
+        parsed = pd.to_datetime(values, errors="coerce")
+        parsed_timezone = parsed.dt.tz
+        if parsed_timezone is None:
+            localized = parsed.dt.tz_localize(
+                source_timezone,
+                nonexistent="shift_forward",
+                ambiguous="NaT",
+            )
+        else:
+            localized = parsed
+        return localized.dt.tz_convert("UTC")
+    except Exception as exc:
+        raise ValueError(
+            "Failed to parse PV power timestamps with configured timezone "
+            f"{source_timezone!r}. Check the timezone name and timestamp format."
+        ) from exc
+
+
 def normalize_pv_power(path: Path, source_config: dict, capacity_kw: float) -> pd.DataFrame:
     """将光伏功率数据标准化为 timestamp + pv_power_kw 的统一 schema。
 
@@ -100,7 +136,10 @@ def normalize_pv_power(path: Path, source_config: dict, capacity_kw: float) -> p
 
     output = pd.DataFrame(
         {
-            "timestamp": pd.to_datetime(frame[timestamp_col], errors="coerce", utc=True),
+            "timestamp": _parse_source_timestamp(
+                frame[timestamp_col],
+                source_timezone=source_config.get("timezone"),
+            ),
             "pv_power_kw": power,
         }
     )

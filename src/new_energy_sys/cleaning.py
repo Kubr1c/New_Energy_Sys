@@ -148,6 +148,92 @@ def _stage_pitfall(config: dict, coverage: float) -> str:
     return "当前清洗质量满足建模入口要求，但后续训练/测试仍必须严格按时间顺序切分，禁止随机切分造成时间泄漏。"
 
 
+def _compute_time_axis_diagnostics(
+    frame: pd.DataFrame,
+    *,
+    min_pairs: int = 100,
+) -> dict[str, Any]:
+    """诊断 PV 出力与 GHI 是否处在同一条 UTC 时间轴上。
+
+    诊断会遍历 -10 到 +10 小时的平移窗口，计算 `pv_power_kw(t)` 与
+    `ghi_wm2(t + shift)` 的相关性。修复前，PVDAQ 的本地无时区时间被误当
+    UTC，常会让最优平移落在 +7h；修复后，PV 峰值与 NSRDB 辐照度峰值应
+    在 0h 平移处最相关。
+    """
+
+    required_columns = {"timestamp", "pv_power_kw", "ghi_wm2"}
+    missing_columns = sorted(required_columns - set(frame.columns))
+    if missing_columns:
+        return {
+            "status": "skipped",
+            "reason": f"missing required columns: {', '.join(missing_columns)}",
+            "shift_range_hours": [-10, 10],
+            "corr_by_shift": {},
+            "best_shift_hours": None,
+            "best_corr_power_ghi": None,
+            "zero_shift_corr_power_ghi": None,
+            "correlation_lift_from_zero": None,
+        }
+
+    working = frame[["timestamp", "pv_power_kw", "ghi_wm2"]].copy()
+    working["timestamp"] = pd.to_datetime(working["timestamp"], errors="coerce", utc=True)
+    working["pv_power_kw"] = pd.to_numeric(working["pv_power_kw"], errors="coerce")
+    working["ghi_wm2"] = pd.to_numeric(working["ghi_wm2"], errors="coerce")
+    working = working.dropna(subset=["timestamp", "pv_power_kw", "ghi_wm2"])
+    working = working.drop_duplicates(subset=["timestamp"], keep="first").sort_values("timestamp")
+
+    if len(working) < min_pairs:
+        return {
+            "status": "skipped",
+            "reason": f"not enough paired PV/GHI rows: {len(working)} < {min_pairs}",
+            "shift_range_hours": [-10, 10],
+            "corr_by_shift": {},
+            "best_shift_hours": None,
+            "best_corr_power_ghi": None,
+            "zero_shift_corr_power_ghi": None,
+            "correlation_lift_from_zero": None,
+        }
+
+    pv = working.set_index("timestamp")["pv_power_kw"]
+    ghi = working.set_index("timestamp")["ghi_wm2"]
+    corr_by_shift: dict[int, float | None] = {}
+    for shift_hours in range(-10, 11):
+        shifted_ghi = ghi.copy()
+        shifted_ghi.index = shifted_ghi.index - pd.Timedelta(hours=shift_hours)
+        paired = pd.concat([pv, shifted_ghi.rename("ghi_shifted")], axis=1, join="inner").dropna()
+        if len(paired) < min_pairs or paired["pv_power_kw"].std() == 0 or paired["ghi_shifted"].std() == 0:
+            corr_by_shift[shift_hours] = None
+            continue
+        corr_by_shift[shift_hours] = round(float(paired["pv_power_kw"].corr(paired["ghi_shifted"])), 6)
+
+    valid_corr = {shift: corr for shift, corr in corr_by_shift.items() if corr is not None and np.isfinite(corr)}
+    if not valid_corr:
+        return {
+            "status": "failed",
+            "reason": "no finite PV/GHI correlations could be computed",
+            "shift_range_hours": [-10, 10],
+            "corr_by_shift": corr_by_shift,
+            "best_shift_hours": None,
+            "best_corr_power_ghi": None,
+            "zero_shift_corr_power_ghi": corr_by_shift.get(0),
+            "correlation_lift_from_zero": None,
+        }
+
+    best_shift_hours, best_corr = max(valid_corr.items(), key=lambda item: item[1])
+    zero_corr = corr_by_shift.get(0)
+    lift = round(best_corr - zero_corr, 6) if zero_corr is not None else None
+    return {
+        "status": "ok",
+        "reason": None,
+        "shift_range_hours": [-10, 10],
+        "corr_by_shift": corr_by_shift,
+        "best_shift_hours": int(best_shift_hours),
+        "best_corr_power_ghi": round(float(best_corr), 6),
+        "zero_shift_corr_power_ghi": zero_corr,
+        "correlation_lift_from_zero": lift,
+    }
+
+
 def _fill_feature_missing_values(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, dict[str, int]]]:
     """处理特征缺失值。
 
@@ -250,6 +336,10 @@ def clean_stage_two_dataset(frame: pd.DataFrame, config: dict) -> CleaningResult
     filled = filled.sort_values("timestamp").reset_index(drop=True)
 
     standardized, scaler = _standardize_features(filled)
+    time_axis_diagnostics = _compute_time_axis_diagnostics(filled)
+    best_shift_hours = time_axis_diagnostics["best_shift_hours"]
+    zero_shift_corr = time_axis_diagnostics["zero_shift_corr_power_ghi"]
+    correlation_lift = time_axis_diagnostics["correlation_lift_from_zero"]
 
     target_hour_coverage = round(observed_hours / expected_hours, 6) if expected_hours else 0.0
     known_deviations = _known_deviations(config)
@@ -288,7 +378,14 @@ def clean_stage_two_dataset(frame: pd.DataFrame, config: dict) -> CleaningResult
             if "storage_soc" in filled.columns
             else None,
             "monotonic_timestamp": bool(filled["timestamp"].is_monotonic_increasing),
+            "pv_weather_best_shift_is_zero": bool(best_shift_hours == 0),
+            "pv_weather_correlation_acceptable": bool(zero_shift_corr is not None and zero_shift_corr >= 0.85),
+            "pv_weather_no_large_shift_lift": bool(
+                best_shift_hours == 0
+                or (correlation_lift is not None and correlation_lift <= 0.05)
+            ),
         },
+        "time_axis_diagnostics": time_axis_diagnostics,
         "known_deviation_from_original_plan": known_deviations,
         "pitfall": _stage_pitfall(config, target_hour_coverage),
     }
@@ -333,6 +430,27 @@ def write_quality_report(report: dict[str, Any], path: Path) -> None:
     ]
     for gate, passed in gates.items():
         lines.append(f"- {gate}: `{passed}`")
+
+    diagnostics = report.get("time_axis_diagnostics", {})
+    lines.extend(
+        [
+            "",
+            "## PV/GHI Time Axis Diagnostics",
+            "",
+            f"- Status: `{diagnostics.get('status')}`",
+            f"- Reason: `{diagnostics.get('reason')}`",
+            f"- Shift range hours: `{diagnostics.get('shift_range_hours')}`",
+            f"- Best shift hours: `{diagnostics.get('best_shift_hours')}`",
+            f"- Best corr power/GHI: `{diagnostics.get('best_corr_power_ghi')}`",
+            f"- Zero-shift corr power/GHI: `{diagnostics.get('zero_shift_corr_power_ghi')}`",
+            f"- Correlation lift from zero: `{diagnostics.get('correlation_lift_from_zero')}`",
+            "",
+            "### Correlation By Shift",
+            "",
+        ]
+    )
+    for shift, corr in diagnostics.get("corr_by_shift", {}).items():
+        lines.append(f"- {shift}h: `{corr}`")
 
     lines.extend(["", "## Anomalies Before Clipping", ""])
     for column, count in anomalies.items():

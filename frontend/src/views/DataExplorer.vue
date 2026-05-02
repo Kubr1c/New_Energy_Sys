@@ -3,13 +3,13 @@
     <PageState
       v-if="loading"
       type="loading"
-      title="正在加载数据运维"
+      title="正在加载数据管理"
       message="正在读取数据质量、特征重要性和任务命令列表。"
     />
     <PageState
       v-else-if="error"
       type="error"
-      title="数据运维加载失败"
+      title="数据管理加载失败"
       :message="error.message"
       retryable
       @retry="loadDataExplorer"
@@ -17,15 +17,17 @@
     <PageState
       v-else-if="!hasExplorerData"
       type="empty"
-      title="暂无数据运维结果"
+      title="暂无数据管理结果"
       message="当前接口没有返回质量报告、特征重要性或任务命令。"
       retryable
       @retry="loadDataExplorer"
     />
     <template v-else>
+      <InsightSummary :title="dataInsight.title" :items="dataInsight.items" :tone="dataInsight.tone" />
+
       <MetricGrid :items="qualityCards" min-width="240px" />
 
-      <ChartCard title="特征重要性 Top 20 — Feature Importance">
+      <ChartCard title="特征重要性前 20">
         <PageState
           v-if="!hasPositiveFeatures"
           type="empty"
@@ -35,7 +37,7 @@
         <v-chart v-else class="feat-chart" :option="featureChartOption" theme="dark-tech" autoresize />
       </ChartCard>
 
-      <PageSection title="模型训练 / 调度仿真触发 — Task Runner">
+      <PageSection title="模型训练 / 调度仿真触发">
         <div class="task-grid">
           <div v-for="cmd in commands" :key="cmd.command_id" class="task-item">
             <div class="task-copy">
@@ -43,13 +45,13 @@
               <span>{{ cmd.command_id }} · Admin only</span>
             </div>
             <el-button size="small" type="primary" :loading="runningTasks[cmd.command_id]" @click="submitTask(cmd.command_id)">
-              Run
+              运行
             </el-button>
           </div>
         </div>
         <p v-if="taskError" class="task-error">{{ taskError.message }}</p>
         <div v-if="taskHistory.length" class="task-history">
-          <h4>Recent Tasks</h4>
+          <h4>最近任务</h4>
           <div v-for="task in taskHistory" :key="task.task_id" class="task-record">
             <span>{{ task.command }}</span>
             <strong :class="task.status">{{ task.status }}</strong>
@@ -69,6 +71,7 @@ import { BarChart } from 'echarts/charts'
 import { GridComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
+import InsightSummary from '../components/InsightSummary.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
@@ -91,6 +94,19 @@ const taskPolls = new Map()
 const hasExplorerData = computed(() => Boolean(quality.value) || features.value.length > 0 || commands.value.length > 0)
 const hasPositiveFeatures = computed(() => features.value.some(feature => Number(feature.importance ?? feature.gain ?? 0) > 0))
 const featureChartOption = computed(() => buildFeatureImportanceOption(features.value))
+const topFeature = computed(() => [...features.value]
+  .sort((a, b) => Number(b.importance ?? b.gain ?? 0) - Number(a.importance ?? a.gain ?? 0))[0] || {})
+const dataInsight = computed(() => ({
+  title: hasExplorerData.value
+    ? `当前清洗后样本数为 ${valueOrIssue(quality.value?.rows?.final_cleaned)}，覆盖率为 ${coverageText.value}。`
+    : '当前未读取到数据质量、特征重要性或任务命令结果。',
+  tone: hasExplorerData.value ? 'positive' : 'warning',
+  items: [
+    `时间范围：${periodText.value}。`,
+    `最高重要性特征：${topFeature.value.feature || topFeature.value.name || '数据缺失'}。`,
+    `可触发任务数量：${commands.value.length}；历史任务数量：${taskHistory.value.length}。`,
+  ],
+}))
 
 const qualityCards = computed(() => [
   { label: '样本数 Samples', value: valueOrIssue(quality.value?.rows?.final_cleaned), icon: '📊', iconType: 'text', gradient: 'var(--gradient-cyan)' },

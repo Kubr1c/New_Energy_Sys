@@ -99,7 +99,9 @@ npm run build
 npm run dev
 ```
 
-Pitfall：前端默认访问 `/api`，开发时需要同时启动后端，或在代理/环境变量中指向可用 API。
+默认访问地址为 `http://127.0.0.1:3060`。不要使用 `http://localhost:3060`，Windows 环境下 `localhost` 可能解析到 IPv6 `::1`，导致 Vite 已启动但浏览器仍报 `ERR_CONNECTION_REFUSED`。如启动失败，先查看 `docs/startup_troubleshooting.md`。
+
+Pitfall：前端默认访问 `/api`，开发时需要同时启动后端；本机 Windows 可能保留 `3000` 端口，直接绑定会报 `listen EACCES`。
 
 ## 数据与建模流水线
 
@@ -195,7 +197,7 @@ npm run test
 npm run test:e2e
 ```
 
-Pitfall：E2E 测试依赖后端 API 和 Playwright 浏览器环境；只运行 `npm run test` 时执行的是静态检查，不等价于完整端到端验证。
+Pitfall：E2E 测试依赖后端 API 和 Playwright 浏览器环境；只运行 `npm run test` 时执行的是静态检查，不等价于完整端到端验证。启动端口和常见故障见 `docs/startup_troubleshooting.md`。
 
 ## 配置说明
 

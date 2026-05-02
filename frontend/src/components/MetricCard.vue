@@ -65,7 +65,7 @@ defineProps({
 
 .metric-value {
   color: var(--text-primary);
-  font-size: 22px;
+  font-size: 26px;
   line-height: 1.2;
   overflow-wrap: anywhere;
 }

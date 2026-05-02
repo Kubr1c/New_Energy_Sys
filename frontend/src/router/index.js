@@ -12,37 +12,37 @@ const routes = [
     path: '/',
     name: 'Overview',
     component: () => import('../views/OverviewDashboard.vue'),
-    meta: { requiresAuth: true, title: '预测监控 Overview' },
+    meta: { requiresAuth: true, title: '系统总览' },
   },
   {
     path: '/models',
     name: 'Models',
     component: () => import('../views/ModelComparison.vue'),
-    meta: { requiresAuth: true, title: '模型评估 Model Evaluation' },
+    meta: { requiresAuth: true, title: '模型评估' },
   },
   {
     path: '/dispatch',
     name: 'Dispatch',
     component: () => import('../views/DispatchSimulation.vue'),
-    meta: { requiresAuth: true, title: '调度收益 Dispatch Value' },
+    meta: { requiresAuth: true, title: '调度分析' },
   },
   {
     path: '/governance',
     name: 'Governance',
     component: () => import('../views/GovernanceAnalysis.vue'),
-    meta: { requiresAuth: true, title: '配置治理 Strategy Governance' },
+    meta: { requiresAuth: true, title: '配置治理' },
   },
   {
     path: '/data',
     name: 'Data',
     component: () => import('../views/DataExplorer.vue'),
-    meta: { requiresAuth: true, title: '数据运维 Data Operations' },
+    meta: { requiresAuth: true, title: '数据管理' },
   },
   {
     path: '/reports',
     name: 'Reports',
     component: () => import('../views/ReportViewer.vue'),
-    meta: { requiresAuth: true, title: '报告归档 Reports' },
+    meta: { requiresAuth: true, title: '实验报告' },
   },
 ]
 

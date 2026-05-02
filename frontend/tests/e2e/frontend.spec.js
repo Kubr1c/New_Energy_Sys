@@ -12,7 +12,7 @@ async function login(page, account = ADMIN) {
   await expect(page).toHaveURL(/#\/$/)
   await expect(page.locator('body')).toContainText('PV', { timeout: 30_000 })
   await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible()
-  await expect(page.locator('header')).toContainText('预测监控')
+  await expect(page.locator('header')).toContainText('系统总览')
 }
 
 async function expectRouteMarker(page, route, marker) {
@@ -38,11 +38,11 @@ test.describe('NES frontend production contract', () => {
 
     await login(page)
     await expectRouteMarker(page, '/#/', 'PV')
-    await expectRouteMarker(page, '/#/models', 'Model Leaderboard')
-    await expectRouteMarker(page, '/#/dispatch', 'Strategy Scores')
-    await expectRouteMarker(page, '/#/governance', 'Sensitivity Analysis')
-    await expectRouteMarker(page, '/#/data', 'Feature Importance')
-    await expectRouteMarker(page, '/#/reports', 'Stages')
+    await expectRouteMarker(page, '/#/models', '模型排行榜')
+    await expectRouteMarker(page, '/#/dispatch', 'Rawhide 策略增量收益')
+    await expectRouteMarker(page, '/#/governance', '储能配置 Pareto 分析')
+    await expectRouteMarker(page, '/#/data', '特征重要性前 20')
+    await expectRouteMarker(page, '/#/reports', '实验阶段')
   })
 
   test('keeps the mobile dashboard inside the viewport', async ({ page }) => {
@@ -80,7 +80,7 @@ test.describe('NES frontend production contract', () => {
     })
 
     await page.goto('/#/reports')
-    await page.getByText('XSS Probe').click()
+    await page.getByRole('button', { name: /XSS Probe/ }).click()
     await expect(page.getByRole('heading', { name: 'Safe Report' })).toBeVisible()
 
     // The test asserts the DOM contract directly: dangerous elements and inline
@@ -93,9 +93,9 @@ test.describe('NES frontend production contract', () => {
   test('shows a visible permission error when a guest submits a task', async ({ page }) => {
     await login(page, GUEST)
     await page.goto('/#/data')
-    await expect(page.locator('body')).toContainText('Feature Importance', { timeout: 30_000 })
+    await expect(page.locator('body')).toContainText('特征重要性前 20', { timeout: 30_000 })
 
-    await page.getByRole('button', { name: 'Run' }).first().click()
+    await page.getByRole('button', { name: '运行' }).first().click()
     await expect(page.locator('.task-error')).toBeVisible()
   })
 })

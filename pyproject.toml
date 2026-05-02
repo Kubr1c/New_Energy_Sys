@@ -14,6 +14,10 @@ dependencies = [
   "pyarrow>=15.0.0",
   "lightgbm>=4.6.0",
   "scikit-learn>=1.4.0",
+  "zarr>=2.17.0,<3.0.0",
+  "numcodecs>=0.12.0",
+  "s3fs>=2024.0.0",
+  "xarray>=2024.0.0",
   "torch>=2.0.0",
   "xgboost>=2.0.0",
   "catboost>=1.2.0"
@@ -40,6 +44,14 @@ new-energy-run-stage18-rawhide-simulation = "new_energy_sys.cli.run_stage18_rawh
 new-energy-prepare-forecast-weather = "new_energy_sys.cli.prepare_forecast_weather:main"
 new-energy-prepare-hrrr-sample = "new_energy_sys.cli.prepare_hrrr_sample:main"
 new-energy-prepare-hrrr-month = "new_energy_sys.cli.prepare_hrrr_month:main"
+new-energy-prepare-hrrr-point-forecast = "new_energy_sys.cli.prepare_hrrr_point_forecast:main"
+new-energy-prepare-hrrr-point-forecast-manifest = "new_energy_sys.cli.prepare_hrrr_point_forecast_manifest:main"
+new-energy-prepare-hrrr-point-forecast-monthly-manifests = "new_energy_sys.cli.prepare_hrrr_point_forecast_monthly_manifests:main"
+new-energy-prepare-hrrr-strict-probe-manifest = "new_energy_sys.cli.prepare_hrrr_strict_probe_manifest:main"
+new-energy-run-hrrr-point-forecast-batch = "new_energy_sys.cli.run_hrrr_point_forecast_batch:main"
+new-energy-merge-hrrr-point-forecast-batches = "new_energy_sys.cli.merge_hrrr_point_forecast_batches:main"
+new-energy-validate-hrrr-probe-contract = "new_energy_sys.cli.validate_hrrr_probe_contract:main"
+new-energy-validate-hrrr-stage7-contract = "new_energy_sys.cli.validate_hrrr_stage7_contract:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

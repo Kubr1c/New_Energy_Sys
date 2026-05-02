@@ -24,7 +24,8 @@
       "target_name": "pvdaq_system_10_2020_2022.csv",
       "timestamp_candidates": ["measured_on"],
       "power_candidates": ["ac_power__423"],
-      "power_unit": "W"
+      "power_unit": "W",
+      "timezone": "Etc/GMT+7"
     },
     "weather": {
       "kind": "nsrdb",

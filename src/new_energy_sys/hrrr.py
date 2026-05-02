@@ -19,9 +19,25 @@ import math
 import re
 import warnings
 
-import cfgrib
 import pandas as pd
 import requests
+
+try:
+    import cfgrib
+except (ImportError, RuntimeError):  # ecCodes native library not available (e.g., Windows)
+    cfgrib = None
+
+DEFAULT_REQUIRED_PATTERNS = (
+    ("TMP", "2 m above ground"),
+    ("RH", "2 m above ground"),
+    ("UGRD", "10 m above ground"),
+    ("VGRD", "10 m above ground"),
+    ("APCP", "surface"),
+    ("TCDC", "entire atmosphere"),
+    ("DSWRF", "surface"),
+    ("PRES", "surface"),
+)
+DSWRF_REQUIRED_PATTERNS = (("DSWRF", "surface"),)
 
 
 @dataclass(frozen=True)
@@ -75,6 +91,8 @@ def _open_hrrr_datasets(grib_path: Path) -> list[Any]:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=FutureWarning)
+        if cfgrib is None:
+            raise ImportError("cfgrib requires ecCodes native library; install via conda or system package manager")
         return cfgrib.open_datasets(grib_path, backend_kwargs={"indexpath": ""})
 
 
@@ -111,7 +129,11 @@ def _parse_idx_records(idx_text: str) -> list[HrrrIndexRecord]:
     return records
 
 
-def _selected_hrrr_records(records: list[HrrrIndexRecord]) -> list[HrrrIndexRecord]:
+def _selected_hrrr_records(
+    records: list[HrrrIndexRecord],
+    *,
+    required_patterns: tuple[tuple[str, str], ...] = DEFAULT_REQUIRED_PATTERNS,
+) -> list[HrrrIndexRecord]:
     """选取严格天气试点所需的最小变量集。
 
     所需变量：2m 温度、2m 相对湿度、10m 风速分量、地面累积降水、
@@ -126,17 +148,6 @@ def _selected_hrrr_records(records: list[HrrrIndexRecord]) -> list[HrrrIndexReco
     Raises:
         ValueError: 缺少必需变量时抛出
     """
-
-    required_patterns = [
-        ("TMP", "2 m above ground"),
-        ("RH", "2 m above ground"),
-        ("UGRD", "10 m above ground"),
-        ("VGRD", "10 m above ground"),
-        ("APCP", "surface"),
-        ("TCDC", "entire atmosphere"),
-        ("DSWRF", "surface"),
-        ("PRES", "surface"),
-    ]
 
     selected: list[HrrrIndexRecord] = []
     missing: list[str] = []
@@ -159,12 +170,39 @@ def _selected_hrrr_records(records: list[HrrrIndexRecord]) -> list[HrrrIndexReco
     return sorted(selected, key=lambda record: record.start_byte)
 
 
+def _record_range_end(
+    *,
+    all_records: list[HrrrIndexRecord],
+    selected_record: HrrrIndexRecord,
+    content_length: int,
+) -> int:
+    """Return the inclusive byte-range end for one selected GRIB message.
+
+    HRRR `.idx` files describe every GRIB message in physical byte order.  The
+    end byte for a selected message is therefore the byte immediately before
+    the *next record in the full idx*, not before the next selected record.  This
+    distinction is important for production runs: using the next selected record
+    silently downloads every unrelated message between two project variables and
+    can turn a small point subset into hundreds of megabytes per timestamp.
+    """
+
+    ordered_records = sorted(all_records, key=lambda record: record.start_byte)
+    for index, record in enumerate(ordered_records):
+        if record.line_number != selected_record.line_number:
+            continue
+        if index + 1 < len(ordered_records):
+            return ordered_records[index + 1].start_byte - 1
+        return content_length - 1
+    raise ValueError(f"selected HRRR idx record is not present in full idx: {selected_record}")
+
+
 def _download_hrrr_subset(
     *,
     grib_url: str,
     idx_url: str,
     subset_target: Path,
     timeout_seconds: int = 120,
+    required_patterns: tuple[tuple[str, str], ...] = DEFAULT_REQUIRED_PATTERNS,
 ) -> Path:
     """仅下载项目变量所需的 GRIB 消息子集。
 
@@ -188,7 +226,7 @@ def _download_hrrr_subset(
     idx_response = requests.get(idx_url, timeout=timeout_seconds)
     idx_response.raise_for_status()
     records = _parse_idx_records(idx_response.text)
-    selected = _selected_hrrr_records(records)
+    selected = _selected_hrrr_records(records, required_patterns=required_patterns)
 
     head_response = requests.head(grib_url, timeout=timeout_seconds)
     head_response.raise_for_status()
@@ -197,11 +235,12 @@ def _download_hrrr_subset(
     subset_target.parent.mkdir(parents=True, exist_ok=True)
     temp_target = subset_target.with_suffix(subset_target.suffix + ".tmp")
     with temp_target.open("wb") as handle:
-        for index, record in enumerate(selected):
-            if index + 1 < len(selected):
-                end_byte = selected[index + 1].start_byte - 1
-            else:
-                end_byte = content_length - 1
+        for record in selected:
+            end_byte = _record_range_end(
+                all_records=records,
+                selected_record=record,
+                content_length=content_length,
+            )
             response = requests.get(
                 grib_url,
                 headers={"Range": f"bytes={record.start_byte}-{end_byte}"},
@@ -212,6 +251,60 @@ def _download_hrrr_subset(
 
     temp_target.replace(subset_target)
     return subset_target
+
+
+def extract_hrrr_dswrf_point_sample(
+    *,
+    grib_path: Path,
+    latitude: float,
+    longitude: float,
+) -> HrrrPointSample:
+    """Extract only surface downward shortwave radiation from a GRIB subset.
+
+    This is used as the strict DSWRF source for HRRR forecast runs because the
+    public `hrrrzarr` forecast product exposes DSWRF metadata but no forecast
+    chunk objects for the tested 2022 cycles.  The function intentionally keeps
+    the same point-selection metadata as the full extractor so audits can prove
+    the radiation value came from the same station-nearest grid.
+    """
+
+    datasets = _open_hrrr_datasets(grib_path)
+    dswrf = _first_data_array(datasets, "sdswrf")
+    if dswrf is None:
+        available = sorted({str(name) for dataset in datasets for name in dataset.data_vars})
+        raise ValueError(f"HRRR DSWRF subset is missing sdswrf; available variables: {available}")
+
+    value, grid_lat, grid_lon = _select_point(dswrf, latitude, longitude)
+    issue_time = _scalar_coord(dswrf, "time")
+    valid_time = _scalar_coord(dswrf, "valid_time")
+    step_value = dswrf.coords.get("step")
+    lead_time_hour = None
+    if step_value is not None:
+        lead_time_hour = float(pd.to_timedelta(step_value.values).total_seconds() / 3600.0)
+
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": valid_time,
+                "weather_forecast_issue_time": issue_time,
+                "weather_forecast_lead_time_hour": lead_time_hour,
+                "grid_latitude": grid_lat,
+                "grid_longitude": grid_lon,
+                "ghi_wm2": value,
+            }
+        ]
+    )
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame["weather_forecast_issue_time"] = pd.to_datetime(frame["weather_forecast_issue_time"], utc=True)
+    metadata = {
+        "grib_path": str(grib_path),
+        "requested_latitude": latitude,
+        "requested_longitude": longitude,
+        "grid_latitude": grid_lat,
+        "grid_longitude": grid_lon,
+        "available_variables": sorted({str(name) for dataset in datasets for name in dataset.data_vars}),
+    }
+    return HrrrPointSample(frame=frame, metadata=metadata)
 
 
 def _first_data_array(datasets: list[Any], variable_name: str) -> Any | None:

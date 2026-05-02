@@ -22,10 +22,18 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    // Keep the development server on the IPv4 loopback address.
+    // Windows can resolve "localhost" to either ::1 or 127.0.0.1 depending on
+    // the caller. Binding explicitly avoids the common case where Vite listens
+    // only on [::1]:3060 while Chromium tries 127.0.0.1:3060 and gets
+    // ERR_CONNECTION_REFUSED.
+    host: '127.0.0.1',
+    port: 3060,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // Match the documented FastAPI bind address. Using "localhost" here can
+        // hit the same IPv6/IPv4 ambiguity as the frontend dev server.
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

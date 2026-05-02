@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 
 const frontendDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(frontendDir, '..')
+const frontendPort = Number(process.env.NES_E2E_FRONTEND_PORT || 3060)
+const frontendBaseURL = `http://127.0.0.1:${frontendPort}`
 const localBrowserCandidates = [
   process.env.NES_E2E_BROWSER_PATH,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -32,7 +34,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: frontendBaseURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -59,9 +61,9 @@ export default defineConfig({
       timeout: 60_000,
     },
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 3000',
+      command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort}`,
       cwd: frontendDir,
-      url: 'http://127.0.0.1:3000',
+      url: frontendBaseURL,
       reuseExistingServer: true,
       timeout: 60_000,
     },

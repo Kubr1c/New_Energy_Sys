@@ -1,10 +1,12 @@
 <template>
   <div class="report-viewer">
+    <InsightSummary :title="reportInsight.title" :items="reportInsight.items" :tone="reportInsight.tone" />
+
     <div class="rv-layout">
       <aside class="glass-card stage-list">
         <div class="stage-header">
-          <h3>实验阶段 Stages</h3>
-          <span>{{ stages.length }} reports</span>
+          <h3>实验阶段</h3>
+          <span>{{ stages.length }} 份报告</span>
         </div>
         <button
           v-for="stage in stages"
@@ -24,7 +26,7 @@
       <section class="glass-card report-content">
         <div v-if="loading" class="report-loading">
           <el-icon class="spin" :size="24"><Loading /></el-icon>
-          <span>Loading report...</span>
+          <span>正在加载报告...</span>
         </div>
         <PageState
           v-else-if="error && !mdContent"
@@ -48,6 +50,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import InsightSummary from '../components/InsightSummary.vue'
 import PageState from '../components/PageState.vue'
 import { fetchReportMarkdown, fetchReportStages } from '../services/reportService'
 import { normalizeApiError } from '../utils/api'
@@ -60,6 +63,18 @@ const loading = ref(false)
 const error = ref(null)
 
 const renderedMd = computed(() => renderMarkdown(mdContent.value))
+const currentStage = computed(() => stages.value.find(stage => stage.stage_id === selected.value) || {})
+const reportInsight = computed(() => ({
+  title: stages.value.length
+    ? `当前共有 ${stages.value.length} 份阶段报告，默认打开 ${stageLabel(currentStage.value.name || currentStage.value.stage_id || stages.value[0]?.stage_id)}。`
+    : '当前没有可用阶段报告，请先生成实验报告产物。',
+  tone: stages.value.length ? 'positive' : 'warning',
+  items: [
+    `当前选中阶段：${selected.value || '未选择'}。`,
+    `当前报告格式：${currentStage.value.has_md ? 'Markdown' : currentStage.value.stage_id ? 'JSON' : '数据缺失'}。`,
+    error.value ? `最近一次加载提示：${error.value.message}` : '报告内容通过本地 Markdown 清洗后展示。',
+  ],
+}))
 
 function stageLabel(name) {
   return String(name || '').replace(/_/g, ' ')
@@ -92,12 +107,13 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.report-viewer { height: calc(100vh - 112px); min-height: 560px; }
+.report-viewer { display: flex; flex-direction: column; gap: var(--space-lg); height: calc(100vh - 112px); min-height: 560px; }
 .rv-layout {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   gap: var(--space-lg);
-  height: 100%;
+  min-height: 0;
+  flex: 1;
 }
 .stage-list {
   min-width: 0;

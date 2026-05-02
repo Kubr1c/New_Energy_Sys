@@ -23,14 +23,16 @@
       @retry="loadModels"
     />
     <template v-else>
-      <PageSection title="模型排行榜 Model Leaderboard (Test Set)">
+      <InsightSummary :title="modelInsight.title" :items="modelInsight.items" :tone="modelInsight.tone" />
+
+      <PageSection title="模型排行榜">
         <template #actions>
-          <span class="table-hint">默认展示全部记录，图表聚焦 Top 12 / Top 5</span>
+          <span class="table-hint">默认展示全部记录，图表聚焦前 12 / 前 5</span>
           <el-select v-model="selectedFeatureSet" size="small" style="width: 200px">
-            <el-option label="All Feature Sets" value="all" />
-            <el-option label="History Only" value="history_only" />
-            <el-option label="Full Features" value="full_features_without_target_plus" />
-            <el-option label="Weather + History" value="weather_history_target_aligned" />
+            <el-option label="全部特征集" value="all" />
+            <el-option label="仅历史特征" value="history_only" />
+            <el-option label="完整特征" value="full_features_without_target_plus" />
+            <el-option label="天气 + 历史" value="weather_history_target_aligned" />
           </el-select>
         </template>
         <el-table
@@ -45,10 +47,10 @@
           <el-table-column label="#" width="60">
             <template #default="{ $index }">{{ $index + 1 }}</template>
           </el-table-column>
-          <el-table-column prop="model" label="Model" min-width="150" sortable>
+          <el-table-column prop="model" label="模型" min-width="150" sortable>
             <template #default="{ row }"><span :style="{ color: modelColor(row.model) }">{{ row.model }}</span></template>
           </el-table-column>
-          <el-table-column prop="feature_set" label="Features" min-width="130">
+          <el-table-column prop="feature_set" label="特征集" min-width="130">
             <template #default="{ row }"><span class="feat-tag">{{ shortFeature(row.feature_set) }}</span></template>
           </el-table-column>
           <el-table-column prop="nrmse_capacity" label="nRMSE" width="110" sortable>
@@ -67,10 +69,10 @@
       </PageSection>
 
       <div class="chart-row">
-        <ChartCard title="模型 nRMSE 对比 — Top 12">
+        <ChartCard title="模型 nRMSE 对比">
           <v-chart class="chart" :option="barChartOption" theme="dark-tech" autoresize />
         </ChartCard>
-        <ChartCard title="多指标雷达图 — Top 5">
+        <ChartCard title="多指标雷达图">
           <v-chart class="chart" :option="radarChartOption" theme="dark-tech" autoresize />
         </ChartCard>
       </div>
@@ -86,6 +88,7 @@ import { BarChart, RadarChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, RadarComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
+import InsightSummary from '../components/InsightSummary.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
 import { buildModelBarChartOption, buildModelRadarChartOption, fmtNum, modelColor, shortFeature } from '../charts/modelCharts'
@@ -108,6 +111,26 @@ const filteredTestMetrics = computed(() => {
 const rankedMetrics = computed(() => [...filteredTestMetrics.value]
   .sort((a, b) => Number(a.nrmse_capacity || Infinity) - Number(b.nrmse_capacity || Infinity))
   .map((row, index) => ({ ...row, rankKey: `${row.model}-${row.feature_set}-${index}` })))
+const bestMetric = computed(() => rankedMetrics.value[0] || {})
+const baselineMetric = computed(() => rankedMetrics.value.find(row => /linear|baseline/i.test(String(row.model))) || rankedMetrics.value[rankedMetrics.value.length - 1] || {})
+const modelInsight = computed(() => {
+  const bestNrmse = Number(bestMetric.value.nrmse_capacity)
+  const baseNrmse = Number(baselineMetric.value.nrmse_capacity)
+  const improvement = Number.isFinite(bestNrmse) && Number.isFinite(baseNrmse) && baseNrmse > 0
+    ? `${(((baseNrmse - bestNrmse) / baseNrmse) * 100).toFixed(1)}%`
+    : '无法计算'
+  return {
+    title: bestMetric.value.model
+      ? `${bestMetric.value.model} 当前排名第一，测试集 nRMSE 为 ${fmtNum(bestMetric.value.nrmse_capacity)}。`
+      : '当前筛选条件下没有可用模型指标。',
+    tone: bestMetric.value.model ? 'positive' : 'warning',
+    items: [
+      `推荐特征集：${shortFeature(bestMetric.value.feature_set) || '数据缺失'}。`,
+      `相对参考模型 ${baselineMetric.value.model || '数据缺失'} 的 nRMSE 改善：${improvement}。`,
+      `当前筛选范围包含 ${rankedMetrics.value.length} 条测试集记录。`,
+    ],
+  }
+})
 
 const barChartOption = computed(() => buildModelBarChartOption(rankedMetrics.value))
 const radarChartOption = computed(() => buildModelRadarChartOption(rankedMetrics.value))

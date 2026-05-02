@@ -23,36 +23,38 @@
       @retry="loadSensitivity"
     />
     <template v-else>
+      <InsightSummary :title="governanceInsight.title" :items="governanceInsight.items" :tone="governanceInsight.tone" />
+
       <div class="top-section">
-        <ChartCard title="储能配置 Pareto 分析 — Sensitivity Analysis (Stage 15)">
+        <ChartCard title="储能配置 Pareto 分析">
           <p class="chart-note">横轴为增量收益，纵轴为循环次数；高亮点代表 Pareto 前沿配置。</p>
           <v-chart class="chart-lg" :option="paretoOption" theme="dark-tech" autoresize />
         </ChartCard>
       </div>
 
       <div class="bottom-section">
-        <ChartCard title="容量 x 功率增量收益热力图 — Revenue Heatmap">
+        <ChartCard title="容量 x 功率增量收益热力图">
           <p class="chart-note">颜色越暖表示平均增量收益越高，用于快速定位候选容量/功率组合。</p>
           <v-chart class="chart-md" :option="heatmapOption" theme="dark-tech" autoresize />
         </ChartCard>
 
-        <PageSection title="配置详情 — Configuration Details">
+        <PageSection title="配置详情">
           <el-table :data="sensitivity" style="width:100%" stripe max-height="350" size="small">
-            <el-table-column prop="config_id" label="Config" min-width="180" />
-            <el-table-column prop="capacity_kwh" label="Cap (kWh)" width="95" sortable>
+            <el-table-column prop="config_id" label="配置" min-width="180" />
+            <el-table-column prop="capacity_kwh" label="容量 (kWh)" width="105" sortable>
               <template #default="{ row }">{{ Number(row.capacity_kwh).toFixed(2) }}</template>
             </el-table-column>
-            <el-table-column prop="max_charge_kw" label="Power (kW)" width="100" sortable>
+            <el-table-column prop="max_charge_kw" label="功率 (kW)" width="105" sortable>
               <template #default="{ row }">{{ Number(row.max_charge_kw).toFixed(2) }}</template>
             </el-table-column>
-            <el-table-column prop="incremental_revenue_eur" label="Incr Rev (€)" width="110" sortable>
+            <el-table-column prop="incremental_revenue_eur" label="增量收益 (€)" width="120" sortable>
               <template #default="{ row }">
                 <span :class="Number(row.incremental_revenue_eur) >= 0 ? 'pos' : 'neg'">
                   {{ Number(row.incremental_revenue_eur).toFixed(3) }}
                 </span>
               </template>
             </el-table-column>
-            <el-table-column prop="cycle_equivalent_count" label="Cycles" width="85" sortable>
+            <el-table-column prop="cycle_equivalent_count" label="循环" width="85" sortable>
               <template #default="{ row }">{{ Number(row.cycle_equivalent_count).toFixed(0) }}</template>
             </el-table-column>
             <el-table-column prop="pareto_front" label="Pareto" width="80">
@@ -75,6 +77,7 @@ import { HeatmapChart, ScatterChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TitleComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
+import InsightSummary from '../components/InsightSummary.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
 import { buildParetoOption, buildRevenueHeatmapOption } from '../charts/governanceCharts'
@@ -89,9 +92,39 @@ const error = ref(null)
 
 const paretoOption = computed(() => buildParetoOption(sensitivity.value))
 const heatmapOption = computed(() => buildRevenueHeatmapOption(sensitivity.value))
+const paretoRows = computed(() => sensitivity.value.filter(row => isTrue(row.pareto_front)))
+const bestConfig = computed(() => {
+  const candidates = paretoRows.value.length ? paretoRows.value : sensitivity.value
+  return [...candidates].sort((a, b) => Number(b.incremental_revenue_eur || -Infinity) - Number(a.incremental_revenue_eur || -Infinity))[0] || {}
+})
+const governanceInsight = computed(() => {
+  const revenue = Number(bestConfig.value.incremental_revenue_eur)
+  const cycles = Number(bestConfig.value.cycle_equivalent_count)
+  return {
+    title: bestConfig.value.config_id
+      ? `推荐优先关注 ${bestConfig.value.config_id}，其增量收益为 ${formatCurrency(revenue)}。`
+      : '当前没有可用于推荐的储能配置结果。',
+    tone: Number.isFinite(revenue) && revenue >= 0 ? 'positive' : 'warning',
+    items: [
+      `Pareto 前沿配置数量：${paretoRows.value.length} / ${sensitivity.value.length}。`,
+      `该配置循环次数：${Number.isFinite(cycles) ? cycles.toFixed(0) : '数据缺失'}。`,
+      `容量/功率：${formatNumber(bestConfig.value.capacity_kwh)} kWh / ${formatNumber(bestConfig.value.max_charge_kw)} kW。`,
+    ],
+  }
+})
 
 function isTrue(value) {
   return value === true || value === 'True' || value === 'true' || value === 1 || value === '1'
+}
+
+function formatNumber(value, digits = 2) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n.toFixed(digits) : '数据缺失'
+}
+
+function formatCurrency(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `€${n.toFixed(3)}` : '数据缺失'
 }
 
 async function loadSensitivity() {

@@ -11,11 +11,11 @@ const recordingDir = path.join(reportsDir, '.frontend-demo-1080p-artifacts')
 const recordingViewport = { width: 1920, height: 1080 }
 
 const ROUTES = [
-  { nav: '模型评估 Models', marker: 'Model Leaderboard' },
-  { nav: '调度收益 Dispatch', marker: 'Strategy Scores' },
-  { nav: '配置治理 Governance', marker: 'Sensitivity Analysis' },
-  { nav: '数据运维 Data', marker: 'Feature Importance' },
-  { nav: '报告归档 Reports', marker: 'Stages' },
+  { nav: '模型评估', marker: '模型排行榜' },
+  { nav: '调度分析', marker: 'Rawhide 策略增量收益' },
+  { nav: '配置治理', marker: '储能配置 Pareto 分析' },
+  { nav: '数据管理', marker: '特征重要性前 20' },
+  { nav: '实验报告', marker: '实验阶段' },
 ]
 
 async function pauseForRecording(page, milliseconds = 1200) {

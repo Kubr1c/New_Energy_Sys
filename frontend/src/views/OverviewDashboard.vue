@@ -23,10 +23,12 @@
       @retry="loadData"
     />
     <template v-else>
+      <InsightSummary :title="overviewInsight.title" :items="overviewInsight.items" :tone="overviewInsight.tone" />
+
       <MetricGrid :items="kpiCards" min-width="220px" />
 
       <div class="main-row">
-        <ChartCard title="PV 功率预测 vs 实际 — Prediction vs Actual">
+        <ChartCard title="PV 功率预测对比">
           <template #actions>
             <el-select v-model="predDays" size="small" style="width: 96px" @change="loadPredictions">
               <el-option label="7 天" :value="168" />
@@ -39,7 +41,7 @@
 
         <div class="summary-column">
           <section class="glass-card summary-card">
-            <h3>站点信息 Site Info</h3>
+            <h3>站点信息</h3>
             <div class="detail-row"><span>Site</span><strong>PVDAQ System 10</strong></div>
             <div class="detail-row"><span>Location</span><strong>{{ locationText }}</strong></div>
             <div class="detail-row"><span>Period</span><strong>2020-01 ~ 2022-12</strong></div>
@@ -47,14 +49,14 @@
           </section>
 
           <section class="glass-card summary-card">
-            <h3>运行摘要 Model Status</h3>
+            <h3>运行摘要</h3>
             <div class="status-line good">主模型测试集 nRMSE {{ metricText(mainMetric.nrmse_capacity) }}</div>
             <div class="status-line good">日间 nRMSE {{ metricText(mainMetric.daytime_nrmse_capacity) }}</div>
             <div class="status-line muted">预测曲线 {{ predictions.length.toLocaleString('zh-CN') }} 个时间点</div>
           </section>
 
           <section class="glass-card pipeline-card">
-            <h3>技术路线 Pipeline</h3>
+            <h3>技术路线</h3>
             <div class="pipeline-grid">
               <span v-for="stage in pipelineStages" :key="stage.id">{{ stage.id }} {{ stage.name }}</span>
             </div>
@@ -73,6 +75,7 @@ import { LineChart } from 'echarts/charts'
 import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
+import InsightSummary from '../components/InsightSummary.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import PageState from '../components/PageState.vue'
 import { buildPredictionChartOption } from '../charts/overviewCharts'
@@ -91,6 +94,23 @@ const error = ref(null)
 const mainMetric = computed(() => mainMetrics.value.find(row => row.split === 'test') || {})
 const hasOverviewData = computed(() => Boolean(siteConfig.value?.site) || mainMetrics.value.length > 0 || predictions.value.length > 0)
 const predChartOption = computed(() => buildPredictionChartOption(predictions.value))
+const overviewInsight = computed(() => {
+  const nrmse = metricText(mainMetric.value.nrmse_capacity)
+  const capacity = siteConfig.value?.site?.capacity_kw ? `${siteConfig.value.site.capacity_kw} kW` : '数据缺失'
+  const storage = siteConfig.value?.storage?.capacity_kwh ? `${siteConfig.value.storage.capacity_kwh} kWh` : '数据缺失'
+  const hasCoreData = nrmse !== '数据缺失' && predictions.value.length > 0
+  return {
+    title: hasCoreData
+      ? `主模型测试集 nRMSE 为 ${nrmse}，当前已加载 ${predictions.value.length.toLocaleString('zh-CN')} 个预测时间点。`
+      : '系统总览数据尚不完整，请先确认站点配置、模型指标和预测曲线产物。',
+    tone: hasCoreData ? 'positive' : 'warning',
+    items: [
+      `站点容量：${capacity}；储能容量：${storage}。`,
+      `当前预测窗口：${(predDays.value / 24).toFixed(0)} 天。`,
+      `日间 nRMSE：${metricText(mainMetric.value.daytime_nrmse_capacity)}。`,
+    ],
+  }
+})
 const locationText = computed(() => {
   const site = siteConfig.value?.site
   if (!site) return '-'
@@ -98,10 +118,10 @@ const locationText = computed(() => {
 })
 
 const kpiCards = computed(() => [
-  { label: 'PV 容量 Capacity', value: siteConfig.value?.site?.capacity_kw ? `${siteConfig.value.site.capacity_kw} kW` : '数据缺失', icon: 'Sunny', gradient: 'var(--gradient-orange)' },
+  { label: 'PV 容量', value: siteConfig.value?.site?.capacity_kw ? `${siteConfig.value.site.capacity_kw} kW` : '数据缺失', icon: 'Sunny', gradient: 'var(--gradient-orange)' },
   { label: '主模型 nRMSE', value: metricText(mainMetric.value.nrmse_capacity), icon: 'TrendCharts', gradient: 'var(--gradient-cyan)' },
   { label: '日间 nRMSE', value: metricText(mainMetric.value.daytime_nrmse_capacity), icon: 'Sunrise', gradient: 'var(--gradient-green)' },
-  { label: '储能容量 Storage', value: siteConfig.value?.storage?.capacity_kwh ? `${siteConfig.value.storage.capacity_kwh} kWh` : '数据缺失', icon: 'Coin', gradient: 'var(--gradient-purple)' },
+  { label: '储能容量', value: siteConfig.value?.storage?.capacity_kwh ? `${siteConfig.value.storage.capacity_kwh} kWh` : '数据缺失', icon: 'Coin', gradient: 'var(--gradient-purple)' },
 ])
 
 const pipelineStages = [
