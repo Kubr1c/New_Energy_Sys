@@ -149,3 +149,57 @@ HRRR 三年重新抓取是正确的方向，因为：
 4. 按年下载结果 + contract 校验
 5. 三年 merge + 全量 contract
 
+---
+
+## 2020 Probe 审查 & 全量诊断 - 2026-05-03
+
+**Agent**: Claude Code (deepseek-v4-pro)
+**状态**: 2020 年不可行，2021/2022 Full Run 已发送
+
+### 2020 Probe 失败根因分析
+
+**结论**: NOAA HRRRv3 Zarr archive 在 2020 年非冬季月份数据覆盖不完整，非代码 bug。
+
+关键证据：
+- 2020-01 窗口: 48/48 rows ✅（lead times f24-f29 均匀分布）
+- 2020-04 窗口: 0/48 rows ❌（1,200 次尝试全部失败）
+- 2020-07 窗口: 0/48 rows ❌（同上）
+- 2020-10 窗口: 0/48 rows ❌（同上）
+
+April 2020 错误细分：
+- 1,096 次: 所有 8 个 Zarr 变量缺失 (APCP, DSWRF, PRES, RH, TCDC, TMP, UGRD, VGRD)
+- 80 次: 仅 PRES 缺失（Zarr chunk 存在但不完整）
+- 16 次: APCP + PRES 缺失
+- 8 次: 除 DSWRF 外全部缺失
+- 远程读量: 2.39 GB（大部分浪费在失败的重试上）
+
+根因: HRRRv3 (2020 年运行) 的 AWS Zarr archive 对 4-10 月的原始变量覆盖存在系统性缺陷。HRRRv4 于 2020-12-02 上线后才稳定。
+
+**决策**: 跳过 2020 年 Full Run，仅使用 2021-2022 数据。
+
+### 2021/2022 Full Runs
+
+- 2021: CommandId `9373e54e` on i-003506e7961b8d034, 02:51 UTC 启动
+- 2022: CommandId `b6b3d4a1` on i-07ec8acb16929f4c6, 02:52 UTC 启动
+- 超时: 48 小时（172800s）
+
+---
+
+## 代码修复 & 测试 - 2026-05-03
+
+**Agent**: Claude Code (deepseek-v4-pro)
+
+### cfgrib 跨平台兼容
+- `hrrr.py:22-28`: cfgrib import 改为 try/except (ImportError, RuntimeError)
+- Windows 下 ecCodes 原生库不可用时降级为 None
+- `_open_hrrr_datasets`: 添加 cfgrib 可用性守卫
+
+### 测试结果
+- 30/30 tests passed in 1.56s (Windows, Python 3.14.0)
+- 覆盖: HRRR point forecast, probe contract, Stage7 contract
+
+### 提交
+- Commit `48092f9`: 35 files, 4,345 insertions
+- 新增 13 个文件 (CLI + contract modules)
+- 修改 22 个文件
+
