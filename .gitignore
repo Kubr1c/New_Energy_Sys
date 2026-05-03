@@ -28,6 +28,9 @@ reports/*.docx
 reports/*.pdf
 reports/*.html
 
+# Git worktree isolation directory.
+.worktrees/
+
 # Local cloud credentials and SSH private keys must never enter version control.
 *_accessKeys.csv
 *.pem
