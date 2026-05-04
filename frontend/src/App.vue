@@ -72,6 +72,7 @@ const navItems = [
   { path: '/governance', label: '配置治理', subtitle: '容量功率敏感性与 Pareto 选择', icon: 'Histogram' },
   { path: '/data', label: '数据管理', subtitle: '数据质量、特征重要性与任务触发', icon: 'DataLine' },
   { path: '/reports', label: '实验报告', subtitle: '阶段报告与实验依据归档', icon: 'Document' },
+  { path: '/inspect', label: '预测验收', subtitle: '预测结果多日对比与误差分析', icon: 'Monitor' },
 ]
 
 const showShell = computed(() => isAuthenticated.value && route.name !== 'Login')

@@ -201,6 +201,32 @@ def get_feature_report() -> dict | None:
     return read_json_cached(str(_DATA_DIR / "stage3_feature_report.json"))
 
 
+# ---------------------------------------------------------------------------
+# Inspection predictions loader (Stage 26+)
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def load_inspection_parquet() -> pd.DataFrame:
+    """Load precomputed inspection predictions parquet.  Cached once.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: origin_time, valid_time, horizon_hours, experiment,
+        model_name, model_version, feature_set, target_type,
+        raw_prediction_kw, prediction_kw, actual_kw,
+        persistence_origin_kw, persistence_same_hour_yesterday_kw,
+        error_kw, abs_error_kw,
+        ghi_wm2, clearsky_ghi_wm2, solar_elevation_deg, cloud_cover_pct,
+        scenario, split.
+    """
+    path = _DATA_DIR / "inspection_predictions.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_parquet(path)
+
+
 def list_available_stages() -> list[dict]:
     """List all stages that have report files."""
     stages = []

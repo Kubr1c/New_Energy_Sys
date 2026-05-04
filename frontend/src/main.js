@@ -5,6 +5,8 @@ import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 import {
+  ArrowLeft,
+  ArrowRight,
   Coin,
   DataAnalysis,
   DataLine,
@@ -14,6 +16,7 @@ import {
   Histogram,
   Loading,
   Lock,
+  Monitor,
   Setting,
   Sunny,
   Sunrise,
@@ -28,6 +31,8 @@ import './utils/echarts-theme.js'
 const app = createApp(App)
 
 const icons = {
+  ArrowLeft,
+  ArrowRight,
   Coin,
   DataAnalysis,
   DataLine,
@@ -37,6 +42,7 @@ const icons = {
   Histogram,
   Loading,
   Lock,
+  Monitor,
   Setting,
   Sunny,
   Sunrise,

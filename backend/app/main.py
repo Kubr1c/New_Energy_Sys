@@ -18,6 +18,9 @@ from typing import Optional
 import dataclasses
 import os
 
+import numpy as np
+import pandas as pd
+
 from . import auth, data_loader, tasks
 
 # ---------------------------------------------------------------------------
@@ -135,6 +138,189 @@ def get_predictions(
     user: auth.UserInfo = Depends(get_current_user),
 ):
     return data_loader.get_main_model_predictions(limit=limit, offset=offset)
+
+
+# ---------------------------------------------------------------------------
+# Inspection / prediction inspection endpoints (Stage 26+)
+# ---------------------------------------------------------------------------
+
+_INSPECTION_CAPACITY_KW = 1.12  # PV system capacity for the inspected dataset
+
+
+@app.get("/api/predictions/metadata")
+async def inspection_metadata(user: auth.UserInfo = Depends(get_current_user)):
+    """Return metadata about the inspection predictions dataset.
+
+    Reads directly from the parquet to avoid hardcoding values.
+    """
+    df = data_loader.load_inspection_parquet()
+
+    # Build experiment descriptors from first row of each group
+    experiments = []
+    for exp_id in df["experiment"].unique():
+        exp_df = df[df["experiment"] == exp_id].iloc[0]
+        experiments.append({
+            "id": str(exp_id),
+            "model_name": str(exp_df["model_name"]),
+            "version": str(exp_df["model_version"]),
+            "feature_set": str(exp_df["feature_set"]),
+            "target_type": str(exp_df["target_type"]),
+        })
+
+    scenarios: list[str] = sorted(df["scenario"].unique().tolist())
+    horizons: list[int] = sorted(df["horizon_hours"].unique().tolist())
+
+    return {
+        "date_min": str(df["valid_time"].min().date()),
+        "date_max": str(df["valid_time"].max().date()),
+        "horizons": horizons,
+        "experiments": experiments,
+        "scenarios": scenarios,
+        "capacity_kw": _INSPECTION_CAPACITY_KW,
+        "baselines": {
+            "persistence_origin": "prediction = pv_power at origin_time",
+            "persistence_same_hour_yesterday": "prediction = pv_power at valid_time - 24h",
+        },
+    }
+
+
+@app.get("/api/predictions/inspect")
+async def inspection_inspect(
+    start: str,
+    end: str,
+    horizons: str | None = None,
+    experiments: str | None = None,
+    granularity: str = "hour",
+    user: auth.UserInfo = Depends(get_current_user),
+):
+    """Range query on valid_time with optional filters.
+
+    Parameters
+    ----------
+    start : str
+        ISO date string, inclusive lower bound, e.g. ``"2022-09-20"``.
+    end : str
+        ISO date string, exclusive upper bound, e.g. ``"2022-09-23"``.
+    horizons : str, optional
+        Comma-separated horizon hours, e.g. ``"1,6,24"``.  Default all.
+    experiments : str, optional
+        Comma-separated experiment ids, e.g. ``"stage5,e1"``.  Default all.
+    granularity : str
+        ``"hour"`` (default) or ``"day"`` – controls whether raw hourly data
+        or a daily roll-up is returned in the ``data`` field.
+
+    Returns
+    -------
+    dict
+        ``{"data": [...], "daily_summary": {...}}``
+    """
+    df = data_loader.load_inspection_parquet()
+
+    # --- Half-open interval filter on valid_time ---
+    start_ts = pd.Timestamp(start, tz="UTC")
+    end_ts = pd.Timestamp(end, tz="UTC")
+    mask = (df["valid_time"] >= start_ts) & (df["valid_time"] < end_ts)
+    result = df[mask].copy()
+
+    if result.empty:
+        return {"data": [], "daily_summary": {}}
+
+    # --- Filter by horizons ---
+    if horizons:
+        h_list = [int(h) for h in horizons.split(",")]
+        result = result[result["horizon_hours"].isin(h_list)]
+
+    # --- Filter by experiments ---
+    if experiments:
+        exp_list = experiments.split(",")
+        result = result[result["experiment"].isin(exp_list)]
+
+    if result.empty:
+        return {"data": [], "daily_summary": {}}
+
+    # --- Build daily_summary ---
+    result["valid_date"] = result["valid_time"].dt.date
+
+    # Overall daily totals (any experiment / horizon – kWh = sum(kW) * 1h)
+    daily_actual = result.groupby("valid_date")["actual_kw"].sum()
+
+    daily_summary: dict[str, dict] = {}
+
+    for date_val in sorted(result["valid_date"].unique()):
+        date_str = str(date_val)
+        day_df = result[result["valid_date"] == date_val]
+
+        # Overall daily actual energy (kWh)
+        daily_actual_kwh = round(float(day_df["actual_kw"].sum()), 3)
+
+        # Per-experiment / per-horizon metrics
+        by_experiment: dict[str, dict] = {}
+        for exp_id in day_df["experiment"].unique():
+            exp_df = day_df[day_df["experiment"] == exp_id]
+            by_horizon: dict[str, dict] = {}
+            for hor in sorted(exp_df["horizon_hours"].unique()):
+                hor_df = exp_df[exp_df["horizon_hours"] == hor]
+                n = len(hor_df)
+                if n == 0:
+                    continue
+                daily_pred_kwh = round(float(hor_df["prediction_kw"].sum()), 3)
+                daily_error_kwh = round(daily_pred_kwh - daily_actual_kwh, 3)
+                rmse_val = (hor_df["error_kw"] ** 2).mean()
+                rmse_kw = round(float(rmse_val) ** 0.5, 4) if pd.notna(rmse_val) and rmse_val >= 0 else None
+                mae_val = hor_df["abs_error_kw"].mean()
+                mae_kw = round(float(mae_val), 4) if pd.notna(mae_val) else None
+                bias_val = hor_df["error_kw"].mean()
+                bias_kw = round(float(bias_val), 4) if pd.notna(bias_val) else None
+                by_horizon[str(hor)] = {
+                    "daily_pred_kwh": daily_pred_kwh,
+                    "daily_error_kwh": daily_error_kwh,
+                    "rmse_kw": rmse_kw,
+                    "mae_kw": mae_kw,
+                    "bias_kw": bias_kw,
+                }
+            by_experiment[str(exp_id)] = by_horizon
+
+        # Dominant daytime scenario (exclude night)
+        daytime = day_df[day_df["scenario"] != "night"]
+        if not daytime.empty:
+            dominant_scenario = daytime["scenario"].mode().iloc[0]
+        else:
+            dominant_scenario = "night"
+
+        daily_summary[date_str] = {
+            "daily_actual_kwh": daily_actual_kwh,
+            "scenario_dominant": str(dominant_scenario),
+            "experiments": by_experiment,
+        }
+
+    # --- Build hourly data payload ---
+    if granularity == "day":
+        # Return daily roll-up rows instead of raw hourly rows
+        data = []
+        for date_str, summary in sorted(daily_summary.items()):
+            date_df = result[result["valid_date"] == pd.Timestamp(date_str).date()]
+            # One row per date with overall aggregate
+            data.append({
+                "valid_date": date_str,
+                "daily_actual_kwh": summary["daily_actual_kwh"],
+                "scenario_dominant": summary["scenario_dominant"],
+                "n_hours": len(date_df),
+            })
+    else:
+        # Raw hourly data — clean NaNs before JSON serialization.
+        # NOTE: pandas 2.3+ does NOT convert NaN->None via .where(cond, None)
+        # on float64 columns.  Use explicit replace instead.
+        result_no_date = result.drop(columns=["valid_date"])
+        result_clean = result_no_date.replace({np.nan: None})
+        data = result_clean.to_dict(orient="records")
+        for row in data:
+            # Convert timestamp columns to ISO strings
+            if isinstance(row.get("origin_time"), pd.Timestamp):
+                row["origin_time"] = row["origin_time"].isoformat()
+            if isinstance(row.get("valid_time"), pd.Timestamp):
+                row["valid_time"] = row["valid_time"].isoformat()
+
+    return {"data": data, "daily_summary": daily_summary}
 
 
 @app.get("/api/dispatch/metrics/{stage}")

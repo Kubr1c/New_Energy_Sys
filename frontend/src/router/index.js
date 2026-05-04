@@ -44,6 +44,12 @@ const routes = [
     component: () => import('../views/ReportViewer.vue'),
     meta: { requiresAuth: true, title: '实验报告' },
   },
+  {
+    path: '/inspect',
+    name: 'Inspection',
+    component: () => import('../views/InspectionDashboard.vue'),
+    meta: { requiresAuth: true, title: '预测验收' },
+  },
 ]
 
 const router = createRouter({
