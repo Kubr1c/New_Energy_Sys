@@ -102,126 +102,189 @@
 
 ## 二、当前问题诊断
 
-### 2.1 已解决的问题
+### 2.1 强结论（已被证实）
 
-| 问题 | 状态 | 解决方式 |
-|------|------|---------|
-| 预测 vs 真实时间轴错位 | ✅ 已修复 | valid-time 对齐绘图和评估 |
-| 图和指标互相矛盾 | ✅ 已修复 | 对齐后指标与图形一致 |
-| 傍晚 Bias 偏高 | ✅ 显著改善 | sunset_attenuation 减少 35% |
-| t+1h 短临预测精度不足 | ✅ 显著改善 | Day nRMSE −20.4% |
+| 结论 | 证据强度 | 说明 |
+|------|---------|------|
+| 时间对齐问题已彻底解决 | **强** | origin/valid time 分离，图和指标一致 |
+| 天气分层评估必要且有效 | **强** | Clear < Mixed < Overcast 排序在 3 个 horizon 均成立 |
+| E1 的 t+1h 改善是真实的 | **强** | Day nRMSE −20.4% 非小波动，且晴空/多云/阴天均受益 |
+| E2 cloud_scenario 特征无效 | **强** | LightGBM 已从连续 CSI 变量中提取了分类信息 |
+| 普通 tabular 特征工程对 t+6h/t+24h 边际收益低 | **中等偏强** | 仅对 solar + ramp + cloud_scenario 这组特征成立 |
 
-### 2.2 仍然存在的问题
+### 2.2 需要谨慎表述的推论
 
-**问题 1: t+6h 和 t+24h 特征增强无效果**
+**推论 1: "t+6h/t+24h 已无优化空间"**
 
-中长时预测的瓶颈不在特征工程，而在输入信息的质量上限。LightGBM 的 163 个特征已经充分提取了可用信息，新增的太阳几何特征在长 horizon 上被现有的 `target_plus_*` 特征覆盖。
+当前证据只支持：**在当前这组新增特征（solar + ramp + origin cloud_scenario）中**，t+6h/t+24h 没有明显收益。不能扩大为"已经没有任何可优化空间"。
 
-**根本原因**: t+6h 和 t+24h 的预测误差由天气预报不确定性主导。NSRDB `full_features` 中的 `target_plus_*` 特征是 oracle 级别的"完美预报"（真实观测值平移），而实际部署中只能用 HRRR 预报替代——预报本身的误差远大于特征工程的边际增益。
+尚未尝试的方向包括：多步联合建模（multi-output sequence）、CSI 目标重定义、quantile loss、天气分 regime 建模、error correction model、NWP ensemble/lagged NWP 特征。后续若要提升中长时预测，需要改变建模范式或输入信息源，而非继续扩充 tabular 特征。
 
-**问题 2: Mixed/Overcast 场景误差仍然较高**
+**推论 2: "HRRR gap_closure=0.25%，所以 HRRR 不值得继续挖"**
 
-| Horizon | Clear nRMSE | Mixed nRMSE | Overcast nRMSE |
-|---------|------------|-------------|----------------|
-| t+1h | 0.195 | 0.749 | 1.429 |
-| t+6h | 0.277 | 0.739 | 1.266 |
-| t+24h | 0.281 | 0.752 | 1.287 |
+这个结论下得过早。gap_closure 极低可能有三种原因：
+1. HRRR 24–48h 预报本身确实没提供有效增益
+2. HRRR 与 PV 数据在时间/空间对齐或变量使用方式上仍有问题
+3. HRRR 特征的使用方式不对（未做 valid-time 对齐、未按 lead-time 区分、未做空间插值）
 
-Overcast nRMSE 数值高（1.3–1.4）但 RMSE 绝对值仅 0.10–0.11 kW——主要因为阴天平均功率极低（分母效应）。Mixed 场景才是真正的难点：RMSE 绝对值约 0.13–0.20 kW，占 1.12 kW 容量的 12–18%。
+在确认以下问题之前，不能简单判定 HRRR 信息无效：
+- HRRR GHI / cloud_cover 对 actual PV 的相关性是多少？
+- HRRR GHI 对 NSRDB GHI 的逐时误差分布如何？
+- HRRR 在 Clear / Mixed / Overcast 各场景下误差是否一致？
+- HRRR lead time 是否与误差有单调退化关系？
 
-**根本原因**: Mixed 场景下云量快速变化，小时级 NWP 网格（HRRR 3km）无法解析亚网格尺度的云运动。单站点 1.12 kW 系统对局部遮挡高度敏感。
+**推论 3: "t+24h 不值得深度学习"**
 
-**问题 3: cloud_scenario 特征（E2）无增量价值**
+不应以"降低点预测 RMSE"作为是否上深度模型的唯一判据。深度模型在 t+24h 上的价值可能体现在：
+- 多 horizon 一致性（t+1h 到 t+24h 输出合理曲线）
+- 峰值时间稳定性
+- ramp 事件预测
+- quantile interval calibration
+- extreme weather 下的鲁棒性
 
-Origin-time 的晴空指数分类（clear/mixed/overcast）没有为 LightGBM 提供额外信息。原因是现有的连续特征（`clearsky_index_ghi` + rolling stats + `ghi_wm2` + `cloud_cover_pct`）已经充分表达了天气状态。
+更准确的表述是：**t+24h 不应以降低点预测 RMSE 作为主目标，而应转向概率预测、日累计发电量准确度和多步曲线一致性。**
 
-**问题 4: 缺少不确定度量化和多步预测**
+### 2.3 当前指标体系缺失的诊断维度
 
-当前所有模型只输出点预测。对于 Mixed/Overcast 场景，光伏功率本身存在强不确定性——仅给出点预测在实际调度中不够用。此外，当前框架是单 horizon 独立建模，没有利用 horizon 之间的时间依赖关系。
+| 缺失维度 | 重要性 | 说明 |
+|---------|--------|------|
+| 误差分解（幅值/相位/爬坡/能量） | 高 | RMSE 相同的模型工程价值可能完全不同 |
+| Overcast 场景的 RMSE/capacity | 高 | nRMSE 因分母效应在阴天容易被高估 |
+| 误报/漏报发电率 | 中 | 白天 actual≈0 但 pred>阈值 的次数 |
+| 异常样本标记（53 个） | 低 | 不作为独立处理，但应保留为 evaluation tag |
+| HRRR 预测误差传递分析 | 中 | HRRR 各变量对 NSRDB 真值的误差分布 |
 
 ---
 
 ## 三、模型能力现状评估
 
-### 3.1 LightGBM 基线已达到的成熟度
+### 3.1 已确认完成
 
-| 评估维度 | 状态 | 证据 |
-|---------|------|------|
-| 评估管线可信度 | ✅ 成熟 | valid-time 对齐，天气分层，persistence 对比 |
-| 无系统性偏差 | ✅ 合格 | 全局 Bias < 0.02 kW，傍晚 Bias 已修正 |
-| t+1h 短临预测 | ✅ 良好 | Day nRMSE=0.261，比 persistence 好 2.7 倍 |
-| 晴空场景 | ✅ 良好 | Day nRMSE=0.195，曲线形状准确 |
-| 多云/阴天 | ⚠️ 可接受 | nRMSE 0.75–1.43，绝对值 0.10–0.20 kW |
-| t+6h/t+24h | ⚠️ 受限于预报质量 | 特征增强无效，需更好预报源或换范式 |
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 评估管线校正 | ✅ 完成 | valid-time 对齐、天气分层、persistence 对比 |
+| 错误来源分层 | ✅ 完成 | Clear/Mixed/Overcast 三级 + 傍晚 Bias 专项 |
+| LightGBM 特征消融 | ✅ 完成 | E0/E1/E2 三实验 × 三 horizon |
+| 普通 tabular 特征工程边际收益确认 | ✅ 完成 | t+1h 有显著增益，t+6h/t+24h 已接近上限 |
 
-### 3.2 模型已达到的性能天花板
+### 3.2 尚未完成
 
-在当前数据条件下，LightGBM + 163 特征的性能已接近上限：
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| 多步联合建模验证 | ❌ 未做 | 单 horizon 独立训练，未利用 horizon 间依赖 |
+| 概率预测验证 | ❌ 未做 | 仅点预测，无 P10/P50/P90 |
+| CSI / clear-sky normalization 目标重定义 | ❌ 未做 | 直接预测 PV power，未先分离日周期 |
+| 多站点或区域聚合验证 | ❌ 未做 | 仅单站点 1.12 kW |
+| HRRR 误差传递全链路分析 | ❌ 未做 | HRRR 各变量对 NSRDB 的逐时误差分布未知 |
 
-```
-t+1h  Day nRMSE = 0.261  (E1, 本阶段最优)
-t+6h  Day nRMSE = 0.330  (E1, 与 E0 持平)
-t+24h Day nRMSE = 0.335  (E1, 与 E0 持平)
+### 3.3 当前最准确的总体判断
 
-上限参考: NSRDB oracle full_features
-t+1h  Day nRMSE = 0.090  (163 特征含 oracle 天气)
-t+6h  Day nRMSE = 0.089
-t+24h Day nRMSE = 0.091
-```
+**LightGBM 已接近当前 "tabular 特征 + 单 horizon 点预测" 设定下的性能上限。** 不能说接近整个任务的上限——因为多步联合建模、概率预测、CSI 目标重定义等范式级改变尚未尝试。
 
-E1 的 t+1h Day nRMSE=0.261 距离 oracle 上限 0.090 还有 **2.9 倍差距**——但这个差距不是模型架构能弥补的，因为 oracle 模型用的是"完美天气预报"（NSRDB 真实观测平移），而 E1 用的是 origin-time 已知信息。两者输入质量差距巨大。
+后续精度提升不应继续依赖普通特征工程，而应转向目标重定义、概率预测和多 horizon 时序建模。
 
 ---
 
-## 四、推进路线建议
+## 四、推进路线建议（经进阶评审修正）
 
-### 4.1 短临预测（t+1h）：可继续优化
+### 核心原则
 
-t+1h 是唯一一个特征增强有显著效果的 horizon，也是深度学习最可能产生增益的窗口。
+1. **不再继续普通 tabular 特征工程**——边际收益已确认为零
+2. **不直接上重型深度学习**——先用简单模型验证范式级改变是否有效
+3. **t+24h 不以点预测 RMSE 为主目标**——转向概率区间和日累计精度
+4. **对 HRRR 的结论保持开放**——在用更严格方法确认前，不判定"HRRR 无用"
 
-**推荐方向**:
-- 深度学习多任务模型（DLinear → TFT），利用 t+1h 到 t+6h 的时序依赖
-- 加入最近 1–3 小时的 HRRR 短临预报（如果可用）——1h 时效的 NWP 精度远高于 24h
+### 推荐实验矩阵（6 个实验）
 
-**预期增益**: DLinear/TFT 可能将 t+1h Day nRMSE 从 0.261 降至 0.22–0.24（基于文献中深度模型在短临光伏预测上的典型提升）
+| 编号 | 实验 | 目的 | 成功标准 |
+|------|------|------|---------|
+| **X1** | LightGBM-PV baseline | 保持 E1 作为对照组 | — |
+| **X2** | LightGBM-CSI target | 验证目标重定义 | Mixed nRMSE 或日累计误差下降 |
+| **X3** | LightGBM Quantile PV | 概率预测 | P10/P90 覆盖率合理，Mixed/Overcast 区间合理变宽 |
+| **X4** | LightGBM Quantile CSI | 概率 + CSI | Mixed/Overcast calibration 改善 |
+| **X5** | DLinear multi-horizon PV | 验证时序结构 | t+1h 或 t+6h 优于 E1 |
+| **X6** | DLinear multi-horizon CSI | 时序 + 目标重定义 | 综合最优候选 |
 
-### 4.2 日前预测（t+24h）：输入瓶颈，非模型瓶颈
+### P0：CSI 目标重定义（X2）
 
-t+24h 的特征增强无效、HRRR 预报增益极低（gap_closure=0.25%）、深度学习替代 LightGBM 可能也无显著收益。
+**优先级最高。**
 
-**三个可能方向**:
+当前直接预测 `PV_power`，但 PV 功率同时混合了：
+1. 太阳几何（确定性日周期）
+2. 天气/云导致的不确定衰减
 
-| 方向 | 可行性 | 预期增益 | 风险 |
-|------|--------|---------|------|
-| 更好的 NWP 源（如 ECMWF） | 低——数据获取困难 | 中 | 高——不可控 |
-| **多站点/区域聚合预测** | 中——需额外数据 | 中 | 中——站点间相关性未知 |
-| 概率预测（Quantile Regression） | **高**——基于现有模型 | 中——提升实用价值 | 低 |
-| **接受现状**——LightGBM 已是最优解 | **高** | 无精度增益 | 无 |
-
-### 4.3 推荐下一阶段：混合路线
+将目标改为 PV 的晴空指数（CSI），相当于先去掉确定性日周期，让模型专注预测天气衰减：
 
 ```
-Phase 1 (1–2h): 深度学习多任务 t+1h 专用
-  ├── DLinear (baseline) → TFT (主力)
-  ├── 输入: origin-time 特征 + valid-time 太阳几何 + ramp
-  ├── 输出: t+1h, t+2h, t+3h, t+6h 联合预测
-  └── 目标: Day nRMSE < 0.22
+PV_actual = PV_clear_sky × k
+k = PV_actual / PV_clear_sky   ← 新目标
 
-Phase 2 (1h): 概率预测
-  ├── LightGBM Quantile Regression (P10/P50/P90)
-  └── 为调度层提供不确定性区间
-
-Phase 3 (后续): 根据 Phase 1 结果决定
-  ├── 如果深度模型 t+1h 显著优于 LightGBM → 扩展到 t+24h
-  └── 如果提升有限 → 接受 LightGBM 作为最终模型，进入调度层
+最终还原: PV_pred = k_pred × clear_sky_power_valid
 ```
 
-### 4.4 不需要做的事
+`PV_clear_sky` 可通过 pvlib + 站点参数确定性计算（无泄漏）。推荐实验：
 
-- ❌ 在 t+6h/t+24h 上做特征增强——已确认无效果
-- ❌ 在 t+24h 上换深度学习模型——天气预报质量是硬天花板，换模型架构无法突破
-- ❌ 继续挖掘 HRRR 预报特征——gap_closure=0.25% 说明预报信息已充分利用
-- ❌ 对异常样本（53 个）做特殊处理——占比太低，不值得
+| 子实验 | 目标 | 评估 |
+|--------|------|------|
+| X2a | PV power（对照组） | 基线 |
+| X2b | CSI = PV / clear_sky_power | 还原为 PV 后评估 |
+| X2c | logit-clipped CSI | 处理边界 [0,1] 更稳定 |
+
+**成功标准**: Mixed 场景 nRMSE 下降，或日累计发电量误差下降。这对 Mixed/Overcast 特别重要——分离日周期后，模型能更精准地学习云衰减。
+
+### P1：LightGBM Quantile Regression（X3, X4）
+
+**性价比最高的实用提升。**
+
+目标不是降低 P50 RMSE，而是输出 P10/P50/P90 预测区间。对 Mixed/Overcast，点预测本身就不充分——调度系统需要知道不确定性范围。
+
+评估指标：
+
+| 指标 | 含义 |
+|------|------|
+| Pinball Loss | 分位数回归的综合损失 |
+| PICP (Prediction Interval Coverage Probability) | 实际值落在区间内的比例 |
+| MPIW (Mean Prediction Interval Width) | 区间宽度，越窄越好（在覆盖达标前提下） |
+| Calibration by weather scenario | Clear 应窄、Mixed 应宽、Overcast 应覆盖低功率波动 |
+
+**关键检查**:
+- Clear 场景区间是否窄（模型应对晴空有信心）
+- Mixed 场景区间是否合理变宽
+- Overcast 场景是否覆盖低功率波动
+- 傍晚时段区间是否反映低高度角的不确定性
+
+### P2：DLinear 多 horizon 时序建模（X5, X6）
+
+**在确认 CSI 和 Quantile 有效之后再推进。**
+
+DLinear 是极简深度学习基线：序列分解（趋势 + 季节）+ 线性层，参数 ~500 个，训练 5 分钟。
+
+目标不是炫模型，而是回答：
+
+> 过去 24–72 小时序列是否能给未来 1–24 小时提供额外信息？
+
+如果 DLinear 相比 LightGBM 无明显提升，说明问题确实主要受未来天气驱动，时序结构本身的信息已被 LightGBM 的 lag 特征充分提取。
+
+如果 DLinear 有提升，再考虑上更复杂的架构。
+
+### P3：TFT（条件触发）
+
+**不要一开始就做 TFT。** 仅在以下条件全部满足时才推进：
+1. DLinear 或简单 LSTM 已证明"时序结构有增益"
+2. 多变量选择网络有明确的变量候选（不能只是"把全部特征丢进去"）
+3. Attention 可解释性对论文有价值
+
+TFT 的风险：参数多、训练不稳、样本量可能不够（单站点 2.5 万行对 TFT 偏少）、容易出现训练集好但测试集不稳定的情况。
+
+### 暂缓事项
+
+| 事项 | 原因 |
+|------|------|
+| 直接做 TFT | 先用 X2–X6 六个实验确认方向和范式，再决定是否值得 |
+| 多站点/区域聚合 | 当前无额外站点数据，且单站点问题尚未充分探索 |
+| 换 NWP 源（如 ECMWF） | 数据获取不可控，且 HRRR 的误差特性尚未被充分分析 |
+| 异常样本特殊处理 | 53 个（0.21%）占比太低，但应保留为 evaluation tag |
+| cloud_scenario 作为训练特征 | E2 已确认无效——更适合作为评估标签 |
 
 ---
 
