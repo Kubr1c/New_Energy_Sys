@@ -106,15 +106,48 @@ Q1 方向正确但需后校准（conformal calibration + regime-specific widenin
 
 ## 五、深度学习重新评估
 
-codex 评审结论：**不建议现在大规模训练 DL**。
+### 5.1 TCN 时序建模（已完成，5月1日）
+
+Stage6 TCN 实验在数据修正后重新训练，使用修正后的 Stage3 数据（GHI-PV 相关性 0.8213，确认时区修复生效）。
+
+**实验配置**：
+- 架构：TCN baseline（3层因果卷积，kernel_size=3）
+- 窗口：24h / 48h / 72h
+- 目标：t+1h / t+6h / t+24h PV power 直接预测
+- 特征：163 个（与 LightGBM 共享 Stage3 特征全集）
+- 数据：修正后 Stage3，2020-2022，25,358 行
+
+**TCN vs LightGBM 对比（测试集，修正数据）**：
+
+| Horizon | 窗口 | TCN nRMSE/cap | LGBM nRMSE/cap | Δ | TCN 日间 RMSE (kW) |
+|---------|------|--------------|----------------|---|---------------------|
+| t+1h | 24h | 0.0605 | 0.0607 | −0.0002 | 0.0884 |
+| t+6h | 48h | 0.0773 | 0.0775 | −0.0002 | 0.1026 |
+| t+24h | 72h | 0.0804 | 0.0789 | +0.0015 | 0.1029 |
+
+**关键发现**：
+
+1. **TCN 不优于 LightGBM**。在所有 horizon 上，TCN 与 LightGBM 的 nRMSE 差异在 ±0.2 个百分点以内，实际上处于平局状态。窗口从 24h 增加到 72h 也未带来持续改善。
+
+2. **时序依赖边际价值极低**。TCN 能"看到"过去 24-72 小时的光伏功率变化模式，而 LightGBM 只有手工设计的 ramp features（3h rolling）。但 TCN 的时序建模能力未转化为预测精度提升——说明**历史功率序列中可被时序模型利用的额外信息非常有限**。
+
+3. **第一批模型（4月24日）不可信**。17 个 TCN 模型（window/compact/regularized 变体）训练于数据修正之前，使用的 Stage3 存在 GHI 时区偏移 bug。只有 5月1日的 9 个 baseline 模型使用修正后数据。
+
+4. **缺少天气分层评估**。当前 TCN 指标只有整体 RMSE，未像 LightGBM 实验那样按 Clear/Mixed/Overcast 分层报告。无法判断 TCN 是否在特定天气场景下有优势。
+
+### 5.2 综合评估
 
 | 模型 | 当前价值 | 理由 |
 |------|---------|------|
-| DLinear | 低 | 线性时序趋势中的额外信息有限 |
-| TCN | 中 | 可作为 E1 残差修正的受控实验 |
-| TFT | 不建议 | 过重、当前阶段不需要 |
+| DLinear | 低 | 线性时序趋势中额外信息有限；TCN（更强的非线性模型）已证明时序建模无增益 |
+| TCN | 低→中 | 实证与 LightGBM 打平；唯一可能的价值在 E1 残差修正（TCN 学习 LightGBM 的误差模式） |
+| TFT | 不建议 | 过重；在基础时序信号未能击败树模型的条件下，引入 attention 没有依据 |
 
-唯一推荐的 DL 实验：**TCN + t+24h + E1 残差修正**——`最终预测 = E1 + TCN_residual_correction`，只在门控和 Quantile 都完成后再考虑。
+### 5.3 结论
+
+**不建议现阶段投入更多 DL 资源**。TCN 实证结果与 codex 评审的预判一致——当 tabular features（时间、太阳几何、ramp）已经接近信息上限时，时序模型无法从历史序列中榨出额外信号。
+
+唯一保留的 DL 方向：**TCN + t+24h + E1 残差修正**（`PV_pred = E1_pred + TCN(E1_residual)`），仅在 Quantile 后校准完成后考虑。但这个实验的预期收益也很低（E1 残差本身的方差有限）。
 
 ---
 
@@ -132,6 +165,8 @@ codex 评审结论：**不建议现在大规模训练 DL**。
 | ✅ CSI target reformulation | 5月4日 | Mixed/Overcast 改善，Clear 退化，不适合全局 |
 | ✅ Quantile regression | 5月4日 | Q1 可修，Q2 不成立，PICP 偏低 |
 | ✅ Gating experiment | 5月4日 | Oracle gate −3.2%，deployable gate 受限于分类精度 |
+| ✅ TCN DL training (Stage6) | 5月1日 | 修正数据重训，TCN 与 LightGBM 打平，时序依赖无增益 |
+| ✅ Inspection data fixup | 5月4日 | 修复 raw_prediction_kw 语义 + persistence 基线 + Q1/Q2 接入 |
 
 ### 当前最优模型
 
@@ -153,10 +188,14 @@ codex 评审结论：**不建议现在大规模训练 DL**。
 | 2 | `src/new_energy_sys/cli/train_quantile_pv.py` | Q1/Q2 Quantile |
 | 2 | `data/processed/pvdaq_nsrdb_2020_2022/quantile_models/` | Quantile 模型 |
 | 3 | `src/new_energy_sys/cli/train_gating_experiment.py` | 天气门控 |
-| 3 | `reports/technical_report_2026-05-04_csi_and_quantile.md` | 本文档 |
+| — | `src/new_energy_sys/csi_utils.py` | 共享工具模块（数据修复后提取） |
+| — | `scripts/fixup_inspection_predictions.py` | 验收台数据质量修复脚本 |
+| — | `data/processed/.../stage6_tcn_models/` | TCN 时序模型（5月1日，修正数据） |
+| 4 | `reports/technical_report_2026-05-04_csi_and_quantile.md` | 本文档 |
 
 ---
 
-**文档版本**: v1.0  
+**文档版本**: v1.1  
+**更新**: 新增 5.1 TCN 实证结果；Section 7 新增 shared utils 和 fixup 脚本  
 **作者**: Claude Opus 4.7 (Co-Authored-By)  
 **外部评审**: GPT-5.5 (codex) — 两次评审（CSI 计划 + Phase 1-2 结果）
