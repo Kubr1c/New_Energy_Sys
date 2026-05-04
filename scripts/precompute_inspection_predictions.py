@@ -24,7 +24,7 @@ Validation: 5 assertions post-build.
 Usage:
     python scripts/precompute_inspection_predictions.py
 
-Expected: ~2 min, ~22800 rows (3804 test rows x 6 model-horizon combinations).
+Expected: ~2 min, ~150k rows (25358 full rows x 6 model-horizon combinations).
 """
 
 from __future__ import annotations
@@ -237,11 +237,13 @@ def main() -> None:
     # ---- 2. Determine chronological split positions (70/15/15) ----------
     print("\n[2/6] Determining chronological split (70/15/15) boundaries ...")
     n_total = len(df)
-    _train_end = int(n_total * 0.70)
-    test_start = int(n_total * 0.85)
-    test = df.iloc[test_start:].copy()
-    print(f"  Test set: {len(test)} rows (rows {test_start}:{n_total})")
-    print(f"  Test range: {test['timestamp'].min()} -> {test['timestamp'].max()}")
+    train_end = int(n_total * 0.70)
+    valid_end = int(n_total * 0.85)
+    # Use ALL data (not just test) so the dashboard covers the full date range
+    predict_data = df.copy()
+    print(f"  Full dataset: {len(predict_data)} rows")
+    print(f"  Range: {predict_data['timestamp'].min()} -> {predict_data['timestamp'].max()}")
+    print(f"  Split boundaries: train=0:{train_end}, val={train_end}:{valid_end}, test={valid_end}:{n_total}")
 
     # ---- 3. Git commit hash for model_version ---------------------------
     print("\n[3/6] Getting model version ...")
@@ -305,27 +307,23 @@ def main() -> None:
                 # Stage5: original data only, no enhancement
                 inference_data = df
 
-            # Select test rows by position (sorted DataFrame has stable
-            # ordering, so iloc[test_start:] works on any copy)
-            test_features = inference_data.iloc[test_start:][model_feature_names]
+            # Use ALL rows for prediction (full date range coverage)
+            predict_features = inference_data[model_feature_names]
 
-            # Warn about NaN features (should not happen for well-trained
-            # models applied to the same pipeline)
-            n_nan = int(test_features.isna().sum().sum())
+            # Warn about NaN features
+            n_nan = int(predict_features.isna().sum().sum())
             if n_nan > 0:
                 print(f"[WARN] {n_nan} NaN values in features, filling with 0 ...", end=" ", flush=True)
-                test_features = test_features.fillna(0.0)
+                predict_features = predict_features.fillna(0.0)
 
             # ---- 6c. Predict & clip -----------------------------------
-            raw_preds = model.predict(test_features)
+            raw_preds = model.predict(predict_features)
             clipped_preds = np.clip(raw_preds, 0.0, PREDICTION_UPPER)
 
             # ---- 6d. Build result slice -------------------------------
-            # Use pandas Series ops (preserves tz-aware datetime dtype
-            # instead of stripping via .values)
             result = pd.DataFrame({
-                "origin_time": test["timestamp"],
-                "valid_time": test["timestamp"]
+                "origin_time": predict_data["timestamp"],
+                "valid_time": predict_data["timestamp"]
                 + pd.Timedelta(hours=horizon_hours),
                 "horizon_hours": horizon_hours,
                 "experiment": exp_name,
@@ -412,7 +410,18 @@ def main() -> None:
     df_preds["abs_error_kw"] = df_preds["error_kw"].abs()
 
     # ---- 7g. Split label -----------------------------------------------
-    df_preds["split"] = "test"
+    # Assign split based on row position (train: 0-70%, val: 70-85%, test: 85-100%)
+    split_labels = np.empty(len(df_preds), dtype=object)
+    split_labels[:] = "train"
+    # Map index position to split: use the origin_time's position in the sorted data
+    n_rows = len(df_preds)
+    t_end = int(n_rows * 0.70)
+    v_end = int(n_rows * 0.85)
+    # Since df_preds is built from predict_data (which is df sorted),
+    # rows are in chronological order by origin_time
+    split_labels[t_end:v_end] = "validation"
+    split_labels[v_end:] = "test"
+    df_preds["split"] = split_labels
 
     # ---- 7h. Reorder columns to match schema ---------------------------
     df_preds = df_preds[PARQUET_COLUMNS]

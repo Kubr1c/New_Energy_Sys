@@ -49,7 +49,6 @@
             <label class="ctrl-label">日期</label>
             <div class="date-row">
               <el-button
-                :icon="false"
                 size="small"
                 class="date-nav-btn"
                 @click="goDate(-1)"
@@ -69,7 +68,6 @@
                 placeholder="选择日期"
               />
               <el-button
-                :icon="false"
                 size="small"
                 class="date-nav-btn"
                 @click="goDate(1)"
@@ -107,9 +105,9 @@
             <el-radio-group v-model="selectedExperiment" class="ctrl-radio-group" size="small">
               <el-radio
                 v-for="exp in availableExperiments"
-                :key="exp"
-                :value="exp"
-                :label="exp"
+                :key="exp.id"
+                :value="exp.id"
+                :label="exp.id + ' (' + (exp.feature_set || exp.model_name) + ')'"
               />
             </el-radio-group>
           </div>
@@ -456,12 +454,9 @@ async function loadMetadata() {
     const meta = await fetchInspectionMetadata()
     metadata.value = meta
 
-    // Populate available options from metadata
-    if (meta.date_range) {
-      dateMin.value = meta.date_range.min || meta.date_range.min_date || ''
-      dateMax.value = meta.date_range.max || meta.date_range.max_date || ''
-    }
-    // Fallback if metadata has horizons/experiments at top level
+    // Populate available options from metadata (fields at top level)
+    dateMin.value = meta.date_min || ''
+    dateMax.value = meta.date_max || ''
     if (meta.horizons && Array.isArray(meta.horizons)) {
       availableHorizons.value = meta.horizons
     }
@@ -469,11 +464,9 @@ async function loadMetadata() {
       availableExperiments.value = meta.experiments
     }
 
-    // Default selected date to max available date
-    if (!selectedDate.value && dateMax.value) {
-      selectedDate.value = dateMax.value
-    } else if (!selectedDate.value) {
-      selectedDate.value = fmtDate(new Date())
+    // Default selected date to a clear-sky summer day (2022-08-10) for rich PV curve
+    if (!selectedDate.value) {
+      selectedDate.value = '2022-08-10'
     }
   } catch (e) {
     console.error('Failed to load inspection metadata', e)

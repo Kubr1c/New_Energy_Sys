@@ -89,9 +89,9 @@ function buildScenarioMarkAreas(timePoints, solarElevations, scenarios, scenario
 // ---------------------------------------------------------------------------
 
 const HORIZON_COLORS = {
-  1: '#2ecc71',  // green — t+1h
-  6: '#3498db',  // blue  — t+6h
-  24: '#e74c3c', // red   — t+24h
+  1: '#00ff88',  // bright green — t+1h
+  6: '#00bfff',  // deep sky blue — t+6h
+  24: '#ff6b6b', // soft red — t+24h
 }
 const HORIZON_LABELS = {
   1: 't+1h',
@@ -228,12 +228,14 @@ export function buildInspectionChart(rawData, options = {}) {
     name: HORIZON_LABELS[h] || `t+${h}h`,
     type: 'line',
     data: predSeriesMap[h],
-    lineStyle: { color: HORIZON_COLORS[h] || '#999', width: 2, type: 'dashed' },
+    lineStyle: { color: HORIZON_COLORS[h] || '#999', width: 3, type: 'dashed',
+                 shadowBlur: 4, shadowColor: 'rgba(0,0,0,0.5)' },
     itemStyle: { color: HORIZON_COLORS[h] || '#999' },
-    showSymbol: false,
-    smooth: true,
+    symbol: 'diamond',
+    showSymbol: true,
+    symbolSize: 5,
+    smooth: false,
     connectNulls: false,
-    // Mark lines for individual series legend — not needed here
   }))
 
   // Build combined markArea for the actual series (scenario then night, so night wins)
@@ -244,10 +246,13 @@ export function buildInspectionChart(rawData, options = {}) {
       name: 'Actual',
       type: 'line',
       data: actualData,
-      lineStyle: { color: '#ffffff', width: 3 },
-      itemStyle: { color: '#ffffff' },
-      showSymbol: false,
-      smooth: true,
+      lineStyle: { color: '#00ff88', width: 3.5, shadowBlur: 6, shadowColor: 'rgba(0,255,136,0.4)' },
+      itemStyle: { color: '#00ff88', borderColor: '#00ff88', borderWidth: 1 },
+      symbol: 'circle',
+      showSymbol: true,
+      symbolSize: 5,
+      smooth: false,
+      connectNulls: false,
       // Background shading (night + scenario)
       ...(combinedMarkData.length > 0
         ? {
@@ -264,8 +269,10 @@ export function buildInspectionChart(rawData, options = {}) {
       data: persistenceData,
       lineStyle: { color: '#8a92a6', width: 1.5, type: 'dashed' },
       itemStyle: { color: '#8a92a6' },
-      showSymbol: false,
-      smooth: true,
+      symbol: 'triangle',
+      showSymbol: true,
+      symbolSize: 4,
+      smooth: false,
     },
     ...predictionSeries,
   ]
@@ -349,6 +356,26 @@ export function buildInspectionChart(rawData, options = {}) {
 
   // Compute label interval to avoid overcrowding
   const labelInterval = Math.max(0, Math.floor(timePoints.length / 10))
+
+  /**
+   * Format the dataZoom slider endpoint labels safely.
+   *
+   * ECharts does not always pass the raw category string into
+   * `dataZoom.labelFormatter`. For category axes it can pass a numeric index
+   * (for example `0`, `24`, `47`) while the readable timestamp lives in the
+   * axis data array. Calling `slice()` on that numeric value throws at render
+   * time and aborts the whole chart painting pipeline, which is why the
+   * inspection page previously showed an empty canvas.
+   */
+  function formatZoomLabel(value) {
+    const category =
+      typeof value === 'number'
+        ? timePoints[Math.max(0, Math.min(timePoints.length - 1, Math.round(value)))]
+        : value
+
+    if (typeof category !== 'string' || category.length === 0) return ''
+    return category.slice(5, 16)
+  }
 
   return {
     // ---- Tooltip ----
@@ -467,7 +494,7 @@ export function buildInspectionChart(rawData, options = {}) {
         fillerColor: 'rgba(0,212,255,0.15)',
         handleStyle: { color: '#00d4ff' },
         textStyle: { fontSize: 10, color: 'rgba(255,255,255,0.5)' },
-        labelFormatter: (v) => (v ? v.slice(5, 16) : ''),
+        labelFormatter: formatZoomLabel,
       },
     ],
 
