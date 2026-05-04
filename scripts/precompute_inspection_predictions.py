@@ -99,6 +99,7 @@ PARQUET_COLUMNS: list[str] = [
     "cloud_cover_pct",
     "scenario",
     "split",
+    "csi_valid",
 ]
 
 
