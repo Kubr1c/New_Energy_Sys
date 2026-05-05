@@ -26,7 +26,9 @@ import pandas as pd
 
 from new_energy_sys.config import load_config
 from new_energy_sys.stage20_neural_dispatch import (
+    POLICY_MODE_TWO_STAGE,
     run_stage20_neural_dispatch,
+    write_stage20b_report,
     write_stage20_json,
     write_stage20_report,
 )
@@ -69,12 +71,34 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-prefix",
-        default="stage20_neural_dispatch",
+        default=None,
         help="输出文件名前缀（写入 processed_dir）。",
     )
     parser.add_argument(
         "--skip-policy", action="store_true",
         help="跳过 MLP 策略蒸馏，只跑 DL 预测消融。",
+    )
+    parser.add_argument(
+        "--policy-mode",
+        choices=["regression", "two-stage"],
+        default="two-stage",
+        help="Policy distillation mode. two-stage is the Stage20B default.",
+    )
+    parser.add_argument(
+        "--policy-start",
+        default="2021-01-01",
+        help="Inclusive UTC start timestamp for two-stage policy distillation.",
+    )
+    parser.add_argument(
+        "--policy-end",
+        default="2022-12-31",
+        help="Inclusive UTC end timestamp for two-stage policy distillation.",
+    )
+    parser.add_argument(
+        "--action-eps-ratio",
+        type=float,
+        default=0.01,
+        help="Direction-label threshold ratio relative to max charge/discharge power.",
     )
     parser.add_argument(
         "--policy-epochs", type=int, default=50,
@@ -104,6 +128,11 @@ def main() -> None:
 
     args = parse_args()
     runtime = load_config(args.config)
+    output_prefix = args.output_prefix or (
+        "stage20b_two_stage_policy"
+        if args.policy_mode == POLICY_MODE_TWO_STAGE
+        else "stage20_neural_dispatch"
+    )
 
     # Resolve input paths
     stage9_path = _resolve_project_path(runtime.root_dir, args.stage9_predictions)
@@ -119,6 +148,7 @@ def main() -> None:
     print(f"  Feature input: {feature_path}")
     print(f"  Horizon:       {args.horizon_hours}h")
     print(f"  Skip policy:   {args.skip_policy}")
+    print(f"  Policy mode:   {args.policy_mode}")
 
     # Load data
     stage9 = pd.read_csv(stage9_path)
@@ -141,15 +171,26 @@ def main() -> None:
         dl_candidates.append({"model": model.strip(), "feature_set": feature_set.strip()})
     print(f"  DL candidates: {dl_candidates}")
 
-    # Output paths
-    output_paths = {
-        "results_csv": runtime.processed_dir / f"{args.output_prefix}_dl_dispatch_metrics.csv",
-        "metrics_csv": runtime.processed_dir / f"{args.output_prefix}_dl_dispatch_metrics.csv",
-        "policy_replay_csv": runtime.processed_dir / f"{args.output_prefix}_neural_policy_replay.csv",
-        "policy_metrics_csv": runtime.processed_dir / f"{args.output_prefix}_neural_policy_metrics.csv",
-        "report_json": runtime.processed_dir / f"{args.output_prefix}_report.json",
-        "report_md": runtime.processed_dir / f"{args.output_prefix}_report.md",
-    }
+    # Output paths.  Stage20B uses concise file names because the prefix already
+    # identifies the two-stage policy artifact family.
+    if args.policy_mode == POLICY_MODE_TWO_STAGE:
+        output_paths = {
+            "results_csv": runtime.processed_dir / f"{output_prefix}_dl_dispatch_metrics.csv",
+            "metrics_csv": runtime.processed_dir / f"{output_prefix}_dl_dispatch_metrics.csv",
+            "policy_replay_csv": runtime.processed_dir / f"{output_prefix}_replay.csv",
+            "policy_metrics_csv": runtime.processed_dir / f"{output_prefix}_metrics.csv",
+            "report_json": runtime.processed_dir / f"{output_prefix}_report.json",
+            "report_md": runtime.processed_dir / f"{output_prefix}_report.md",
+        }
+    else:
+        output_paths = {
+            "results_csv": runtime.processed_dir / f"{output_prefix}_dl_dispatch_metrics.csv",
+            "metrics_csv": runtime.processed_dir / f"{output_prefix}_dl_dispatch_metrics.csv",
+            "policy_replay_csv": runtime.processed_dir / f"{output_prefix}_neural_policy_replay.csv",
+            "policy_metrics_csv": runtime.processed_dir / f"{output_prefix}_neural_policy_metrics.csv",
+            "report_json": runtime.processed_dir / f"{output_prefix}_report.json",
+            "report_md": runtime.processed_dir / f"{output_prefix}_report.md",
+        }
 
     try:
         result = run_stage20_neural_dispatch(
@@ -163,6 +204,10 @@ def main() -> None:
             policy_hidden_size=args.policy_hidden_size,
             policy_epochs=args.policy_epochs,
             policy_patience=args.policy_patience,
+            policy_mode=args.policy_mode,
+            policy_start=args.policy_start,
+            policy_end=args.policy_end,
+            action_eps_ratio=args.action_eps_ratio,
             skip_policy=args.skip_policy,
             output_paths=output_paths,
         )
@@ -178,14 +223,34 @@ def main() -> None:
     if not result.neural_policy_metrics.empty:
         result.neural_policy_metrics.to_csv(output_paths["policy_metrics_csv"], index=False)
 
+    # Attach prior Stage20 regression metrics if they exist.  This keeps the
+    # Stage20B report comparable without mutating the Stage20 audit artifacts.
+    baseline_report = runtime.processed_dir / "stage20_neural_dispatch_report.json"
+    if args.policy_mode == POLICY_MODE_TWO_STAGE and baseline_report.exists():
+        try:
+            import json
+
+            baseline = json.loads(baseline_report.read_text(encoding="utf-8"))
+            result.report["stage20_regression_baseline"] = baseline.get("policy_training", {})
+        except Exception as exc:
+            result.report["stage20_regression_baseline_error"] = str(exc)
+
     # Report (overwrite if orchestrator already wrote it)
     write_stage20_json(result.report, output_paths["report_json"])
-    write_stage20_report(
-        result.report,
-        result.dl_dispatch_metrics,
-        result.neural_policy_metrics,
-        output_paths["report_md"],
-    )
+    if args.policy_mode == POLICY_MODE_TWO_STAGE:
+        write_stage20b_report(
+            result.report,
+            result.dl_dispatch_metrics,
+            result.neural_policy_metrics,
+            output_paths["report_md"],
+        )
+    else:
+        write_stage20_report(
+            result.report,
+            result.dl_dispatch_metrics,
+            result.neural_policy_metrics,
+            output_paths["report_md"],
+        )
 
     print(f"\nStage20 outputs:")
     for key, p in output_paths.items():
