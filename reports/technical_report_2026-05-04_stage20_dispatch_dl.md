@@ -1,297 +1,174 @@
-# Stage20 调度侧深度学习补强 — 技术报告
+# Stage20 调度侧深度学习补强技术报告
+
+> **Status note - 2026-05-05**: This report is now a **BASELINE / AUDIT** record for the Stage20 regression-MLP policy. The latest dispatch-side neural policy result is Stage20B: `data/processed/pvdaq_nsrdb_2020_2022/stage20b_two_stage_policy_report.md`. Use Stage20 to explain why direct regression MLP was insufficient; use Stage20B for the current neural dispatch conclusion.
 
 **日期**: 2026-05-04  
-**关联提交**: `86f821f` ~ `b834091`（3 commits）  
-**前一阶段**: CSI 目标重定义 + Quantile 概率预测（`reports/technical_report_2026-05-04_csi_and_quantile.md`）
+**状态**: 修正版，取代 Claude 早期探索版结论
+**核心定位**: Stage20 用于补强论文“调度侧深度学习”内容，但不宣称 MLP 优于显式优化器。
 
 ---
 
-## 一、背景
+## 一、修正背景
 
-### 1.1 问题定位
+早期 Stage20 已经打通两条实验线：
 
-CSI/Quantile/Gating 阶段的核心结论：**LightGBM 仍是 PV 预测最优模型，TCN/DLinear 等 DL 方法未超越**。调度侧（Stage10 规则/Stage12 rolling DP/Stage15 敏感性）完全没有深度学习成分。
+1. 将 Stage14 的 TCN/DLinear/Persistence 预测接入 Stage12 rolling 调度。
+2. 用 Stage12 rolling 的 `planned_charge_kw` / `planned_discharge_kw` 训练 MLP policy。
 
-论文题目"基于深度学习的新能源储能侧优化调度系统设计与实现"要求 DL 在系统中具有足够出场率。矛盾在于：预测侧 DL 不优于传统方法，调度侧 DL 缺失。
+审核后发现 4 个问题：
 
-### 1.2 解决策略
+| 问题 | 影响 | 本次修正 |
+|---|---|---|
+| MLP 回放绕过 Stage12 物理结算 | 收益和约束结论不可比 | 改为 Stage12 口径：SOC 边界、PV 侧充电、并网容量、shortfall、curtailment |
+| 预测源时间窗口不同 | LightGBM/DL/Perfect 收益不可横比 | 所有预测源限制到共同 `dispatch_timestamp` 交集 |
+| 方向准确率 baseline 过低 | 53.3% 被误读为强证据 | 增加多数类 baseline、random baseline、Macro-F1、混淆矩阵 |
+| MLP 未使用 24h look-ahead | 不能称为 rolling optimizer 蒸馏 | 输入扩展为当前 SOC + 时间编码 + 未来 24h PV/price/load |
 
-不做高风险 PPO/DRL，改为两个可复现实验：
-
-1. **DL 预测驱动调度消融** — 将已有 DL 预测产物接入 Stage12 rolling，对比不同预测源下的调度决策差异
-2. **MLP 调度策略蒸馏** — 用 Stage12 rolling 的动作作为监督标签训练神经网络策略
-
-叙事口径：不走"DL 最优"，走"DL 全链路价值评估"——预测侧验证 DL 可实现，调度侧验证神经策略可近似优化器。
-
----
-
-## 二、前置工作：验收台数据质量修复
-
-### 2.1 发现的问题
-
-对上阶段自动化推进的产出进行审计，发现三个数据质量问题：
-
-| # | 问题 | 影响 |
-|---|------|------|
-| 1 | `raw_prediction_kw` 语义断裂 | C1/C2/C4 存储的是 CSI 无量纲比值 (~0.8) 而非 kW (~0.36) |
-| 2 | persistence 基线 100% 缺失 | 所有 CSI 实验的 persistence_origin_kw 和 persistence_same_hour_yesterday_kw 为 NaN |
-| 3 | Q1/Q2 未接入验收台 | Quantile 模型有 20 个 pickle 文件和完整 metrics，但 inspection_predictions.parquet 中无记录 |
-
-### 2.2 修复方案
-
-- 新建 `src/new_energy_sys/csi_utils.py` — 提取共享工具模块
-- 新建 `scripts/fixup_inspection_predictions.py` — 一次性数据修复脚本
-- 更新 `scripts/precompute_inspection_predictions.py` — schema 新增 `csi_valid` 列
-
-### 2.3 验证结果
-
-全部 7 项数据质量断言通过：
-
-```
-[PASS] raw_prediction_kw 语义修复: C1 ~0.36 kW (曾 ~0.80 CSI)
-[PASS] persistence 基线补全: 99.9-100%
-[PASS] Q1/Q2 新增 49,560 行 (6 个 quantile experiment)
-[PASS] 无重复 (valid_time, horizon, experiment) 元组
-[PASS] prediction_kw 完整率 100%
-[PASS] prediction_kw >= -0.05
-[PASS] valid_time - origin_time == horizon_hours
-```
+Pitfall：如果仍沿用旧报告中的“约束全通过、收益保留率 88%、显著优于随机 baseline”等表述，答辩时很容易被质疑评估口径不一致。
 
 ---
 
-## 三、TCN 深度学习训练结果审计
+## 二、DL 预测驱动调度消融
 
-### 3.1 数据血统
+所有预测源统一限制到共同调度窗口：
 
-Stage3 数据于 5月1日 23:07 重新生成。验证指标：
-- GHI-PV 日间相关性：**0.8213**（修正前为 −0.248）
-- 25,358 行，0 缺失值，无负 PV
-- 确认时区修复生效
+- `common_window_rows`: 3681
+- `common_start`: 2022-07-30 09:00:00+00:00
+- `common_end`: 2022-12-30 23:00:00+00:00
 
-### 3.2 训练批次
+| 预测源 | 增量收益(EUR) | 短缺(kWh) | 弃光(kWh) | 等效循环 |
+|---|---:|---:|---:|---:|
+| LightGBM history_only | 0.1076 | 124.1371 | 2.2923 | 24.3658 |
+| TCN history_only | 0.5395 | 99.4609 | 0.6391 | 59.1295 |
+| TCN csi_enhanced | 0.5391 | 106.5891 | 0.8357 | 60.0834 |
+| DLinear history_only | 0.5071 | 118.9111 | 0.9915 | 58.9468 |
+| Persistence baseline | 0.5138 | 95.0214 | 0.3777 | 55.1517 |
+| Perfect forecast upper bound | 0.1842 | 0.0000 | 0.0000 | 25.6851 |
 
-| 批次 | 时间 | 模型数 | 数据 | 可信度 |
-|------|------|--------|------|--------|
-| 第一批 | 4月24日 | 17 (window/compact/regularized) | 修正前 Stage3 | 不可信 |
-| 第二批 | 5月1日 23:15 | 9 (baseline × 3窗口 × 3horizon) | 修正后 Stage3 | **可信** |
+结论：
 
-### 3.3 TCN vs LightGBM（修正数据，测试集）
+- 同窗口后，Stage14 时序预测源在 Stage12 rolling 收益上高于 Stage9 LightGBM。
+- Persistence 在该调度窗口也表现较强，说明调度收益不只由 PV RMSE 决定，还受时段、电价、SOC 轨迹和短缺约束影响。
+- Perfect forecast 在 rolling 策略下短缺为 0，但收益不是最高，说明当前 rolling 策略的目标函数偏保守，不能简单把“完美预测”解释为收益上限。
 
-| Horizon | 窗口 | TCN nRMSE/cap | LGBM nRMSE/cap | 结论 |
-|---------|------|--------------|----------------|------|
-| t+1h | 24h | 0.0605 | 0.0607 | 打平 |
-| t+6h | 48h | 0.0773 | 0.0775 | 打平 |
-| t+24h | 72h | 0.0804 | 0.0789 | TCN 略差 |
-
-**判决**：TCN 在所有 horizon 上与 LightGBM 打平或略差，时序建模未带来预测精度增益。
-
-### 3.4 Stage14 DL 模型状态
-
-| 模型 | 训练日期 | 数据 | t+24h nRMSE (history_only) | 状态 |
-|------|---------|------|---------------------------|------|
-| Persistence | N/A | N/A | 0.1520 | 基线 |
-| DLinear | 5月4日 | 修正后 | 0.1357 | 可用 |
-| TCN | 5月4日 | 修正后 | 0.1271 | 可用 |
-| CNN-LSTM | 4月25日 | 修正前 | 0.1232 | 需重训 |
-| Attention-LSTM | 4月25日 | 修正前 | 0.1436 | 需重训 |
-| LightGBM | 5月1日 | 修正后 | **0.1225** | 最优 |
+Pitfall：不能写成“TCN 预测精度优于 LightGBM”。这里比较的是“预测源驱动调度后的收益”，不是 PV 预测 RMSE。
 
 ---
 
-## 四、Stage20：调度侧深度学习补强
+## 三、MLP 策略蒸馏
 
-### 4.1 新增模块
+### 3.1 输入与训练
 
-| 文件 | 行数 | 用途 |
-|------|------|------|
-| `src/new_energy_sys/stage20_neural_dispatch.py` | 740 | 核心逻辑：格式转换、消融调度、策略蒸馏、报告生成 |
-| `src/new_energy_sys/cli/run_stage20_neural_dispatch.py` | 197 | CLI 入口 |
+MLP policy 现在学习 Stage12 rolling optimizer 的首小时动作近似：
 
-运行方式：
-```powershell
-$env:PYTHONPATH = 'src'
-python -m new_energy_sys.cli.run_stage20_neural_dispatch `
-    --config configs/data_sources.pvdaq_nsrdb_2020_2022.json `
-    --stage9-predictions .../stage9_main_model_predictions.csv `
-    --stage14-predictions .../stage14_deep_learning_predictions.csv `
-    --stage12-results .../stage12_storage_rolling_optimization_results.csv `
-    --feature-input .../stage3_feature_dataset.parquet
+- 输入维度: 77
+- 输入内容: 当前 SOC、小时/月周期编码、未来 24h PV 预测、未来 24h 电价、未来 24h 负荷
+- 输出: `planned_charge_kw`、`planned_discharge_kw`
+- 训练/验证/测试样本: 17492 / 3748 / 3749
+- 早停: epoch 13
+
+### 3.2 分类指标
+
+| 指标 | 数值 |
+|---|---:|
+| Direction accuracy | 0.4017 |
+| Majority-class baseline | 0.5017 |
+| Random baseline | 0.3333 |
+| Macro-F1 | 0.3806 |
+| Charge MAE | 0.0233 kW |
+| Discharge MAE | 0.0204 kW |
+
+混淆矩阵：
+
+```text
+rows = actual [idle, charge, discharge]
+cols = pred   [idle, charge, discharge]
+
+[[975, 256, 480],
+ [ 84, 379, 1418],
+ [  4,   1, 152]]
 ```
 
-### 4.2 实验一：DL 预测驱动调度消融
+结论：
 
-**设计**：6 个预测源 × Stage12 rolling 优化 → 对比经济/可靠/电池健康指标
+- MLP 的方向准确率低于多数类 baseline，不能作为“策略学习很强”的证据。
+- Macro-F1 为 0.3806，说明模型能学到部分动作模式，但对 charge/idle/discharge 的区分仍不稳。
+- 论文中应将其表述为“神经策略蒸馏可实现，但分类决策能力弱于多数类基线，仍需改进”。
 
-**预测源**：
-
-| 来源 | 格式 | 行数 |
-|------|------|------|
-| lightgbm_history_only | Stage9 | 25,365 |
-| stage14_tcn_history_only | Stage14→Stage9 | 3,709 |
-| stage14_tcn_csi_enhanced | Stage14→Stage9 | 3,709 |
-| stage14_dlinear_history_only | Stage14→Stage9 | 3,709 |
-| persistence_baseline | Stage14→Stage9 | 3,804 |
-| perfect_forecast_upper_bound | Oracle | 25,365 |
-
-**结果**（rolling_optimization 场景）：
-
-| 预测源 | 增量收益 (EUR) | 短缺 (kWh) | 等效循环 | 平均 SOC |
-|--------|---------------|-----------|---------|----------|
-| LightGBM | 0.579 | 731.4 | 168.4 | 0.159 |
-| TCN history_only | 0.539 | 99.2 | 59.1 | 0.322 |
-| TCN csi_enhanced | 0.539 | 106.4 | 60.1 | 0.322 |
-| DLinear history_only | 0.507 | 118.6 | 58.9 | 0.315 |
-| Persistence | 0.532 | 97.9 | 56.5 | 0.301 |
-| **Perfect forecast** | **1.198** | 0.0 | 174.9 | 0.165 |
-
-**关键发现**：
-
-1. **系统对预测误差高度鲁棒**。不同 DL 预测源产生的调度增量收益差异在 0.03 EUR 以内（0.507-0.539），调度决策几乎不受预测模型选择影响。
-
-2. **Perfect forecast 上界显著**。完美预测的增量收益 (+1.198 EUR) 约为实际预测的 2 倍，表明改进预测精度的经济价值明确——但当前 DL 模型未能提供比 LightGBM 更准的预测，因此无法捕获这个价值。
-
-3. **LightGBM 行数多导致绝对指标不可比**。LightGBM 覆盖全数据集（25,365 行），DL 模型仅覆盖测试集（~3,700 行）。绝对收益/短缺不可直接对比，但**单位指标（每样本增量收益）可比**：LightGBM 为 0.023 EUR/行，DL 约为 0.145 EUR/行——DL 测试集恰好在高价值时段（2022 Q3-Q4 电价较高）。
-
-4. **论文叙事建议**："实验表明，在当前数据条件下，调度决策对预测源选择不敏感，系统的储能调度策略对光伏功率预测误差具有较好的鲁棒性。"
-
-### 4.3 实验二：MLP 调度策略蒸馏
-
-**设计**：
-
-```
-输入 (X): soc_start, forecast_pv_kw, price_eur_mwh, load_mw,
-          hour_sin/cos, month_sin/cos
-标签 (y): planned_charge_kw, planned_discharge_kw  ← Stage12 rolling DP 动作
-模型: 2层 MLP (128 → 128 → 2), ReLU, Dropout 0.1
-训练: AdamW(lr=1e-3), SmoothL1Loss, 早停 patience=10, 时间 70/15/15 切分
-```
-
-**训练结果**：
-
-| 指标 | 值 | 说明 |
-|------|-----|------|
-| 方向准确率 | 53.3% | charge/discharge/idle 三分一致率 |
-| Charge MAE | 0.013 kW | 充电功率平均误差 |
-| Discharge MAE | 0.006 kW | 放电功率平均误差 |
-| 训练轮数 | 30 | 达到早停条件 |
-| 训练/验证/测试 | 17,678 / 3,788 / 3,789 | 70/15/15 时间切分 |
-
-**回放结果**：
-
-| 指标 | 值 | 约束 |
-|------|-----|------|
-| 增量收益 | 0.511 EUR | — |
-| 等效循环 | 21.1 | — |
-| SOC 越界 | 0 行 | PASS |
-| 同时充放电 | 0 行 | PASS |
-| 功率越限 | 0 行 | PASS |
-
-**关键发现**：
-
-1. **MLP 可以学习调度策略**。方向准确率 53.3% 显著高于随机基线（33.3%），证明神经网络能从 DP 动作中提取可学习的调度模式。
-
-2. **约束全部通过**。SOC、功率、同时充放电的硬约束在后处理+回放口径下全部满足，该架构适合生产部署（安全性不劣于规则调度）。
-
-3. **收益保留率 88%**（0.511 / 0.579 vs LightGBM 同日期段）——MLP 策略在简化输入（仅 8 个特征）的条件下保留了大部分优化收益。
-
-4. **论文叙事建议**："MLP 调度策略在保证约束安全的前提下，能够以较少的输入特征学习滚动优化器的调度行为，验证了神经网络作为调度策略近似器的可行性和安全性。虽然其经济收益略低于动态规划最优解，但在推理效率上具有显著优势。"
+Pitfall：不要拿 0.4017 和 0.3333 随机 baseline 单独比较，因为真实标签分布严重不均衡。
 
 ---
 
-## 五、全局进度更新
+## 四、严格物理回放
 
-### 5.1 已完成阶段
+| 场景 | 样本数 | 增量收益(EUR) | 短缺(kWh) | 弃光(kWh) | 等效循环 | SOC 范围 | 收益保留率 |
+|---|---:|---:|---:|---:|---:|---|---:|
+| MLP policy distillation | 3749 | 0.0934 | 146.1853 | 0.0000 | 18.5321 | 0.1000-0.5930 | 0.8379 |
+| Stage12 teacher same window | 3749 | 0.1114 | 126.8429 | 2.3653 | 24.9587 | 0.1000-0.6731 | 1.0000 |
 
-| 阶段 | 完成时间 | 结论 |
-|------|---------|------|
-| ✅ Irradiance decomposition | 5月3日 | DISC 默认，DNI RMSE −13% |
-| ✅ NSRDB validation | 5月3日 | 11,927 白天验证 |
-| ✅ HRRR PV pipeline | 5月3日 | gap_closure=0.25% |
-| ✅ Data fix | 5月4日 | GHI-PV corr 从 −0.248 修复至 +0.821 |
-| ✅ Feature enhancement | 5月4日 | t+1h day_nRMSE −20.4% |
-| ✅ Inspection dashboard | 5月4日 | 8 页前端上线 |
-| ✅ HRRR error diagnosis | 5月4日 | 8 checks, MSE_Skill=0.82 |
-| ✅ CSI reformulation | 5月4日 | Mixed −8%, Clear +39% |
-| ✅ Quantile regression | 5月4日 | Q1 PICP 58-67%, Q2 不成立 |
-| ✅ Gating experiment | 5月4日 | Oracle gate RegW −3.2% |
-| ✅ TCN DL training (Stage6) | 5月1日 | 与 LightGBM 打平 |
-| ✅ Data quality fixup | 5月4日 | 3 项修复，7 断言通过 |
-| ✅ **Stage20 dispatch DL** | **5月4日** | **消融 6 源 + MLP 蒸馏，全门禁通过** |
+约束验证：
 
-### 5.2 当前最优模型
+- `actual_charge_kw <= actual_pv_kw`: 通过，违规 0 行
+- `actual_net_export_kw <= capacity_kw`: 通过，违规 0 行
+- `soc_end ∈ [soc_min, soc_max]`: 通过
+- 充放电功率上限: 通过
+- 同时充放: 通过，违规 0 行
+- 能量平衡误差: 通过
 
-| 层级 | 模型 | 指标 |
-|------|------|------|
-| PV 预测 | E1 LightGBM | t+24h nRMSE/cap = 0.1225 |
-| 时序 DL | TCN (Stage14) | t+24h nRMSE/cap = 0.1271 |
-| 调度 | Stage12 rolling DP | 增量收益 0.579 EUR |
-| 神经调度 | MLP policy (Stage20) | 方向准确率 53.3%, 约束全过 |
+结论：
 
-### 5.3 下一步
+- MLP 在严格物理回放下收益为 Stage12 teacher 同窗口的 83.79%。
+- MLP 短缺更高、循环更低，说明它学到了一部分保守调度行为，但没有稳定复现 Stage12 rolling 的优化能力。
+- 这足以支撑“调度侧引入深度学习策略蒸馏实验”，但不能支撑“深度学习调度优于显式优化”。
 
-1. CNN-LSTM / Attention-LSTM 修正重训 → 补全 DL 预测模型梯度
-2. 如论文需要：MLP policy 扩展到多步预测输入（t+1h/t+6h/t+24h）→ 提升方向准确率
-3. 论文撰写
+Pitfall：收益保留率只对同一测试窗口有效，不能和 Stage12 全量窗口或旧版 Stage20 的指标混用。
 
 ---
 
-## 六、论文叙事框架建议
+## 五、质量门禁
 
-```
-第一章：绪论
-  1.1 新能源储能调度背景
-  1.2 深度学习在能源系统中的应用现状
-  1.3 本文工作与贡献
-
-第二章：系统设计与数据工程
-  2.1 系统总体架构
-  2.2 多源数据采集与清洗（PVDAQ/NSRDB/HRRR）
-  2.3 特征工程（时序特征 / 太阳几何 / 天气特征 / CSI 分解）
-  2.4 数据修正与质量保障（时区修复、GHI 校验、泄漏防护）
-
-第三章：光伏功率预测模型设计与对比
-  3.1 LightGBM 表格模型（工程基线）
-  3.2 TCN 时序卷积模型
-  3.3 DLinear 线性时序模型
-  3.4 CNN-LSTM / Attention-LSTM
-  3.5 Persistence 简单基线
-  3.6 多模型对比分析
-
-第四章：光伏功率概率预测
-  4.1 LightGBM Quantile Regression (P10/P50/P90)
-  4.2 CSI 目标空间 Quantile
-  4.3 预测区间评估与校准
-
-第五章：基于深度学习的储能调度策略
-  5.1 储能调度问题建模（DP/rolling 基线）
-  5.2 预测不确定性对调度决策的影响分析（Stage20 消融）
-  5.3 神经网络调度策略蒸馏（MLP Policy）
-  5.4 规则/DP/神经策略三方对比
-
-第六章：系统实验与分析
-  6.1 实验环境与数据
-  6.2 PV 预测模型对比实验
-  6.3 概率预测校准实验
-  6.4 调度策略对比实验
-  6.5 Rawhide 22MW 参照仿真
-
-第七章：总结与展望
-```
-
-## 七、产出文件
-
-| Phase | 文件 | 说明 |
-|-------|------|------|
-| 审计修复 | `src/new_energy_sys/csi_utils.py` | 共享 CSI 工具模块 |
-| 审计修复 | `scripts/fixup_inspection_predictions.py` | 验收台数据修复 |
-| 审计修复 | `scripts/precompute_inspection_predictions.py` | Schema 更新 |
-| Stage20 | `src/new_energy_sys/stage20_neural_dispatch.py` | 核心逻辑（740 行） |
-| Stage20 | `src/new_energy_sys/cli/run_stage20_neural_dispatch.py` | CLI 入口 |
-| Stage20 | `data/processed/.../stage20_neural_dispatch_*.csv` | 5 个产物文件 |
-| 报告 | `reports/technical_report_2026-05-04_stage20_dispatch_dl.md` | 本文档 |
+| 门禁 | 结果 |
+|---|---|
+| 至少 4 个预测源成功接入 Stage12 | PASS |
+| 调度消融 common window 一致 | PASS |
+| MLP direction accuracy 高于多数类 baseline | FAIL |
+| MLP SOC 在配置边界内 | PASS |
+| MLP 无同时充放 | PASS |
+| MLP 严格物理回放通过 | PASS |
 
 ---
 
-**文档版本**: v1.0  
-**作者**: Claude Opus 4.7 (Co-Authored-By)  
-**关联报告**: `reports/technical_report_2026-05-04_csi_and_quantile.md`
+## 六、论文写法建议
+
+推荐表述：
+
+> 本文进一步设计了调度侧深度学习补强实验。一方面，将 TCN、DLinear 等深度学习预测结果接入 24h rolling 储能调度框架，评估预测源变化对调度收益、短缺和电池循环的影响；另一方面，以 rolling optimizer 的首小时动作为监督标签，训练 MLP 调度策略进行策略蒸馏。实验表明，深度学习预测源在特定同窗口调度场景下可提升调度收益；MLP 策略在严格物理约束回放下可实现可行调度，但方向分类能力未超过多数类基线，说明显式优化器在当前数据和约束下仍更可靠。
+
+不推荐表述：
+
+- “MLP 显著优于随机策略。”
+- “神经调度策略约束全通过，因此可替代 Stage12。”
+- “Perfect forecast 是收益上限。”
+- “TCN 预测精度优于 LightGBM。”
+
+---
+
+## 七、阶段进度评估
+
+已完成：
+
+- 修正 Stage20 预测源公平比较口径。
+- 修正 MLP 24h look-ahead 输入。
+- 修正 MLP 严格物理回放。
+- 修正方向准确率 baseline。
+- 生成新版 Stage20 CSV/JSON/Markdown 产物。
+
+目标完成情况：
+
+- “调度侧加入深度学习”目标已完成。
+- “可作为论文正式实验结论”目标基本完成，但 MLP 结果必须如实写成负结果/受限结果。
+
+下一阶段可行性：
+
+- 可以进入论文写作，不建议继续追加 PPO/DRL。
+- 若还要继续优化，只建议做小范围改进：类别重加权、动作方向分类头、或先分类后回归的 MLP policy。

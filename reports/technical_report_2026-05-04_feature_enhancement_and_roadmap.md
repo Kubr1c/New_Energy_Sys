@@ -1,5 +1,7 @@
 # 技术文档：PV 预测特征增强阶段——成果、问题与推进路线
 
+> **Status note - 2026-05-05**: This report is a **SUPPLEMENTAL / ROADMAP** record for PV feature enhancement. For the current project state and next task, follow `PROGRESS.md` and `reports/project_status_2026-05-05.md`.
+
 **日期**: 2026-05-04  
 **关联提交**: `ac4a049` ~ `c308e45`（4 commits）  
 **前一阶段**: 辐射分解模块 + HRRR PV 预测链路（`reports/technical_report_2026-05-03_irradiance_and_hrrr_pv_pipeline.md`）

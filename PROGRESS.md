@@ -1,5 +1,65 @@
 # Project Progress
 
+## Current Truth Snapshot - 2026-05-05
+
+This file is the project-wide progress anchor. When switching between Codex, Claude Code, or any other tool, read this section first, then `docs/reports_index.md`, then the task-specific report.
+
+### Current Project State
+
+- Current latest stage: `Stage20B two-stage neural dispatch policy`.
+- Current priority: thesis/report integration and document consolidation, not adding more experiments by default.
+- Main dataset/config: `configs/data_sources.pvdaq_nsrdb_2020_2022.json`.
+- Main processed directory: `data/processed/pvdaq_nsrdb_2020_2022/`.
+- Main forecast model for stable production-style prediction: Stage9 LightGBM `history_only`, `target_pv_power_t_plus_24h`.
+- Dispatch baseline chain: Stage10 fixed threshold, Stage11 threshold sensitivity, Stage12 rolling optimization, Stage15 configuration/objective sensitivity, Stage17 battery degradation, Stage18 Rawhide reference simulation.
+- Dispatch-side deep learning chain: Stage20 regression MLP audit baseline, then Stage20B two-stage neural policy as the latest neural dispatch result.
+- HRRR/CSI/Quantile work is supplemental prediction-enhancement research. It does not replace Stage9 as the stable main forecast artifact and does not replace Stage20B as the latest dispatch-side DL result.
+
+### Key Current Results
+
+| Area | Current fact | Canonical artifact |
+|---|---|---|
+| Main PV prediction | Stage9 LightGBM test nRMSE `0.122512`, daytime nRMSE `0.168903` | `data/processed/pvdaq_nsrdb_2020_2022/stage9_main_model_report.md` |
+| Deep-learning prediction | Stage14 rerun completed; TCN/DLinear/CNN-LSTM/Attention-LSTM are comparison/补强 experiments, not mandatory winners | `data/processed/pvdaq_nsrdb_2020_2022/stage14_deep_learning_report.md` |
+| Rolling dispatch | Stage12 rolling optimization passes physical constraints; full-window incremental revenue `0.610039 EUR` | `data/processed/pvdaq_nsrdb_2020_2022/stage12_storage_rolling_optimization_report.md` |
+| Rawhide reference simulation | Uses Rawhide public capacity parameters and PVDAQ proportional scaling; not Rawhide measured historical generation | `data/processed/pvdaq_nsrdb_2020_2022/stage18_rawhide_simulation_report.md` |
+| Stage20 audit baseline | Regression MLP is feasible but weak as a decision classifier; do not claim it beats explicit optimization | `reports/technical_report_2026-05-04_stage20_dispatch_dl.md` |
+| Stage20B latest neural policy | Two-stage policy accuracy `0.9908`, Macro-F1 `0.9749`, discharge recall `0.9804`, discharge->charge errors `0` | `data/processed/pvdaq_nsrdb_2020_2022/stage20b_two_stage_policy_report.md` |
+
+### What Can Be Written In The Thesis
+
+- The system forms a reproducible chain: data processing -> PV prediction -> dispatch optimization -> battery degradation -> reference plant simulation -> frontend/API display.
+- Deep learning is present on both the prediction side and the dispatch side.
+- It is acceptable that LightGBM remains the stable main PV predictor; the thesis can frame DL as systematic comparison and dispatch-side policy distillation.
+- Stage20B supports the statement that a two-stage neural policy can imitate the first-step action of a 24h rolling optimizer under strict physical replay.
+- Stage18 supports "real plant parameter reference simulation", not "Rawhide measured historical revenue replay".
+
+### What Must Not Be Written
+
+- Do not claim deep learning is globally better than LightGBM for PV prediction.
+- Do not claim Stage20/Stage20B replaces Stage12 rolling optimization as a strictly superior optimizer.
+- Do not mix Stage20B full policy-distillation window with Stage14 common-window prediction-source ablation as one fair comparison.
+- Do not describe HRRR/CSI/Quantile as the new main production forecast chain unless a later validated artifact explicitly says so.
+- Do not describe Rawhide scaled PVDAQ data as measured Rawhide generation or real Rawhide market settlement.
+
+### Current Next Task
+
+Recommended next task: `Thesis-Integration-1`.
+
+Use `reports/project_status_2026-05-05.md` and `docs/reports_index.md` to consolidate thesis chapters, figures, and experiment tables. Only run new experiments if explicitly requested. If continuing engineering, update this snapshot before switching tools again.
+
+### Startup Protocol For Claude Code / Codex
+
+1. Read `PROGRESS.md` top section.
+2. Read `docs/reports_index.md`.
+3. For thesis writing, read `reports/project_status_2026-05-05.md`.
+4. For dispatch-side DL, read `data/processed/pvdaq_nsrdb_2020_2022/stage20b_two_stage_policy_report.md` before the older Stage20 report.
+5. Treat all older `Next Task` entries below as historical handover records, not current execution instructions.
+
+Pitfall: the historical snapshots below are preserved for traceability. They are not the current project plan unless the top snapshot explicitly points back to them.
+
+## Historical Snapshots
+
 ## Project Goal
 
 基于公开光伏、天气、负荷、电价数据，构建可复现实验链路：数据处理 -> 特征工程 -> 预测模型 -> 储能调度 -> 报告/展示。

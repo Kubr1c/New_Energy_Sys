@@ -1,5 +1,7 @@
 # 技术文档：CSI 目标重定义 + Quantile 概率预测 + 天气门控
 
+> **Status note - 2026-05-05**: This report is a **SUPPLEMENTAL / RESEARCH** artifact. It documents prediction-enhancement and uncertainty experiments. It does not replace the Stage9 LightGBM main forecast artifact and does not replace Stage20B as the current dispatch-side deep-learning result.
+
 **日期**: 2026-05-04  
 **关联提交**: `f60c710` ~ `a816a80`（3 commits）  
 **前一阶段**: HRRR 预报误差诊断（`reports/hrrr_forecast_error_diagnosis.md`）
