@@ -7,6 +7,7 @@ pytest-cache-files-*/
 .env
 .env.*
 !.env.example
+.local_secrets/
 
 # Local assistant/tool scratch state.  These folders are recreated by Codex,
 # Claude Code, or ad-hoc audit runs and should not be part of reproducible
@@ -14,6 +15,10 @@ pytest-cache-files-*/
 .claude/
 .codex_tmp/
 .tmp_*
+tmp/
+output/
+Anewthesis/
+更新-上海电力大学本科生毕业设计（论文）工作检查细则等17个文件/
 
 # Raw public datasets can be large and should be reproducible from config.
 data/raw/
@@ -39,9 +44,24 @@ reports/*.docx
 reports/*.pdf
 reports/*.html
 
+# Thesis build outputs and editor lock files. Keep source files such as
+# thesis/main.tex visible, but hide generated render/export artifacts.
+~$*
+thesis/*.aux
+thesis/*.log
+thesis/*.out
+thesis/*.toc
+thesis/*.pdf
+thesis/*.html
+thesis/*.doc
+thesis/*.docx
+thesis/*.tmp.docx
+thesis/draft_extracted.txt
+
 # Git worktree isolation directory.
 .worktrees/
 
 # Local cloud credentials and SSH private keys must never enter version control.
 *_accessKeys.csv
+*accessKeys*.csv
 *.pem
