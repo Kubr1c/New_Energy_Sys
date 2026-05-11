@@ -1,0 +1,10 @@
+*.json
+*.log
+*.parquet
+*.zip
+hrrr_monthly/
+hrrr_monthly_cloud_results/
+hrrr_ssm_january_debug/
+hrrr_ssm_january_debug_lead48/
+hrrr_ssm_probe_debug/
+!.gitignore
