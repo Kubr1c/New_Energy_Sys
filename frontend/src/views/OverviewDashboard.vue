@@ -23,7 +23,6 @@
       @retry="loadData"
     />
     <template v-else>
-      <InsightSummary :title="overviewInsight.title" :items="overviewInsight.items" :tone="overviewInsight.tone" />
 
       <section class="overview-intro glass-panel">
         <div>
@@ -74,7 +73,8 @@
             </div>
           </template>
 
-          <PageState v-if="!inspectionRows.length" type="empty" title="当前窗口暂无预测曲线" message="请调整日期、预测时长或天气场景。" />
+          <PageState v-if="inspectionError" type="error" title="预测曲线加载失败" :message="inspectionError.message" retryable @retry="loadInspectionData" />
+          <PageState v-else-if="!inspectionRows.length" type="empty" title="当前窗口暂无预测曲线" message="请调整日期、预测时长或天气场景。" />
           <v-chart v-else class="main-chart overview-inspection-chart" :option="predChartOption" theme="dark-tech" autoresize />
         </ChartCard>
 
@@ -83,9 +83,9 @@
             <h3>预测输入品质</h3>
             <div class="detail-row"><span>当前展示模型</span><strong class="accent">{{ currentDisplayModelName }}</strong></div>
             <div class="detail-row"><span>测试集最优模型</span><strong>{{ bestTestModelName }}</strong></div>
-            <div class="detail-row"><span>测试集 nRMSE</span><strong>{{ metricText(mainMetric.value.nrmse_capacity) }}</strong></div>
-            <div class="detail-row"><span>数据记录</span><strong>{{ Number.isFinite(Number(recordCount.value)) ? Number(recordCount.value).toLocaleString('zh-CN') : recordCount.value }}</strong></div>
-            <div class="detail-row"><span>特征字段</span><strong>{{ featureCount.value }}</strong></div>
+            <div class="detail-row"><span>测试集 nRMSE</span><strong>{{ metricText(mainMetric.nrmse_capacity) }}</strong></div>
+            <div class="detail-row"><span>数据记录</span><strong>{{ Number.isFinite(Number(recordCount)) ? Number(recordCount).toLocaleString('zh-CN') : recordCount }}</strong></div>
+            <div class="detail-row"><span>特征字段</span><strong>{{ featureCount }}</strong></div>
             <div class="detail-row"><span>地理位置</span><strong>{{ locationText }}</strong></div>
           </section>
 
@@ -117,7 +117,6 @@ import { DataZoomComponent, GridComponent, LegendComponent, MarkAreaComponent, M
 import VChart from 'vue-echarts'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import ChartCard from '../components/ChartCard.vue'
-import InsightSummary from '../components/InsightSummary.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import PageState from '../components/PageState.vue'
 import { buildInspectionChart } from '../charts/inspectionCharts'
@@ -151,6 +150,7 @@ const showcaseScenarios = ref([])
 const showcaseReport = ref(null)
 const loading = ref(false)
 const error = ref(null)
+const inspectionError = ref(null)
 
 const scenarioOptions = [
   { value: 'all', label: '全部场景' },
@@ -161,7 +161,13 @@ const scenarioOptions = [
 
 const mainMetric = computed(() => mainMetrics.value.find(row => row.split === 'test') || {})
 const bestTestMetric = computed(() => [...modelComparisonRows.value].filter(row => row.split === 'test').sort((a, b) => Number(a.nrmse_capacity || Infinity) - Number(b.nrmse_capacity || Infinity))[0] || {})
-const hasOverviewData = computed(() => Boolean(siteConfig.value?.site) || mainMetrics.value.length > 0 || inspectionRows.value.length > 0)
+const hasOverviewData = computed(() =>
+  Boolean(siteConfig.value?.site) ||
+  mainMetrics.value.length > 0 ||
+  modelComparisonRows.value.length > 0 ||
+  inspectionRows.value.length > 0 ||
+  dispatchMetrics.value.length > 0
+)
 const predChartOption = computed(() => buildInspectionChart(inspectionRows.value, {
   horizons: selectedHorizons.value,
   experiment: selectedExperiment.value,
@@ -222,7 +228,7 @@ const pipelineStages = [
 const featureEntries = [
   { path: '/dispatch', label: '储能调度', icon: 'Setting' },
   { path: '/data', label: '数据管理', icon: 'DataLine' },
-  { path: '/models', label: '预测输入', icon: 'TrendCharts' },
+  { path: '/models', label: '预测分析', icon: 'TrendCharts' },
   { path: '/inspect', label: '预测验收', icon: 'Monitor' },
 ]
 const dateRangeText = computed(() => {
@@ -293,6 +299,7 @@ async function loadMetadata() {
 }
 async function loadInspectionData() {
   if (!selectedDate.value || !selectedExperiment.value || !selectedHorizons.value.length) return
+  inspectionError.value = null
   try {
     const result = await fetchInspectionData({
       start: addDays(selectedDate.value, -1),
@@ -302,29 +309,36 @@ async function loadInspectionData() {
     })
     inspectionRows.value = result.data || []
   } catch (e) {
-    error.value = e.normalized || normalizeApiError(e)
+    inspectionError.value = e.normalized || normalizeApiError(e)
     inspectionRows.value = []
   }
 }
 async function loadData() {
   loading.value = true
   error.value = null
+  inspectionError.value = null
   try {
     const [bundle, modelData, scenarios, summary] = await Promise.all([
       fetchOverviewBundle(),
       fetchModelComparison(),
       fetchShowcaseScenarios().catch(() => []),
       fetchShowcaseSummary().catch(() => null),
-      loadMetadata(),
+      loadMetadata().catch(() => {}),
     ])
-    siteConfig.value = bundle.siteConfig
-    mainMetrics.value = bundle.mainMetrics
-    quality.value = bundle.quality
-    dispatchMetrics.value = bundle.dispatchMetrics
-    modelComparisonRows.value = [...(modelData.tabularMetrics || []), ...(modelData.deepLearningMetrics || [])]
+    if (bundle) {
+      siteConfig.value = bundle.siteConfig || {}
+      mainMetrics.value = bundle.mainMetrics || []
+      quality.value = bundle.quality || {}
+      dispatchMetrics.value = bundle.dispatchMetrics || []
+    }
+    modelComparisonRows.value = [...(modelData?.tabularMetrics || []), ...(modelData?.deepLearningMetrics || [])]
     showcaseScenarios.value = Array.isArray(scenarios) ? scenarios : []
     showcaseReport.value = summary
-    await loadInspectionData()
+    try {
+      await loadInspectionData()
+    } catch {
+      // Inspection failure is already handled in loadInspectionData via inspectionError
+    }
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
   } finally {

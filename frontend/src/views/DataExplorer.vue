@@ -23,11 +23,18 @@
       @retry="loadDataExplorer"
     />
     <template v-else>
-      <InsightSummary :title="dataInsight.title" :items="dataInsight.items" :tone="dataInsight.tone" />
 
       <MetricGrid :items="qualityCards" min-width="240px" />
 
-      <PageSection title="字段完整性检查">
+      <div class="explorer-tabs">
+        <el-radio-group v-model="explorerMode" size="small">
+          <el-radio-button value="forecast">预测特征贡献</el-radio-button>
+          <el-radio-button value="dispatch">调度收益贡献</el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <template v-if="explorerMode === 'forecast'">
+        <PageSection title="字段完整性检查">
         <div class="integrity-grid">
           <div v-for="item in integritySummary" :key="item.label" class="integrity-item">
             <span>{{ item.label }}</span>
@@ -50,7 +57,7 @@
         />
       </PageSection>
 
-      <ChartCard title="特征重要性 Top20">
+      <ChartCard title="预测特征贡献 Top20">
         <p class="section-help">特征重要性用于展示各输入变量对预测结果的相对贡献。图中使用中文字段名，原始字段名保留在提示信息中用于排查。</p>
         <PageState
           v-if="!hasPositiveFeatures"
@@ -121,12 +128,52 @@
           <p v-else class="section-help">暂无最近任务记录。</p>
         </div>
       </PageSection>
+      </template>
+
+      <template v-else>
+        <ChartCard title="调度收益影响程度">
+          <p class="section-help">该图基于储能配置敏感性与收益情景结果进行相对影响分析，用于辅助判断容量、功率、约束和经济条件对仿真收益的影响。</p>
+          <PageState
+            v-if="comparisonLoading"
+            type="loading"
+            title="正在加载调度收益贡献"
+            message="正在从调度展示与配置敏感性接口读取情景指标。"
+          />
+          <PageState
+            v-else-if="comparisonError"
+            type="error"
+            title="调度收益贡献加载失败"
+            :message="comparisonError.message"
+            retryable
+            @retry="loadComparisonData"
+          />
+          <PageState
+            v-else-if="!dispatchImportanceRows.length"
+            type="empty"
+            title="暂无调度收益贡献"
+            message="当前缺少储能调度敏感性结果，无法生成调度收益影响程度。"
+            retryable
+            @retry="loadComparisonData"
+          />
+          <template v-else>
+            <v-chart class="feat-chart" :option="dispatchImportanceOption" theme="dark-tech" autoresize />
+            <el-table :data="dispatchImportanceRows" stripe size="small" max-height="360" style="width: 100%">
+              <el-table-column prop="label" label="影响因素" min-width="160" />
+              <el-table-column prop="score" label="相对影响程度" width="130" sortable>
+                <template #default="{ row }">{{ row.score.toFixed(1) }}</template>
+              </el-table-column>
+              <el-table-column prop="direction" label="方向说明" min-width="160" show-overflow-tooltip />
+              <el-table-column prop="basis" label="计算依据" min-width="260" show-overflow-tooltip />
+            </el-table>
+          </template>
+        </ChartCard>
+      </template>
     </template>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -134,12 +181,13 @@ import { BarChart } from 'echarts/charts'
 import { GridComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
-import InsightSummary from '../components/InsightSummary.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
 import { buildFeatureImportanceOption, featureImportanceScore } from '../charts/dataExplorerCharts'
 import { fetchDataExplorerBundle, fetchTasks, fetchTaskStatus, submitTaskCommand } from '../services/dataExplorerService'
+import { fetchSensitivityMetrics } from '../services/governanceService'
+import { fetchShowcaseScenarios } from '../services/dispatchService'
 import { normalizeApiError } from '../utils/api'
 import { featureFieldLabel, taskLabel, taskType } from '../utils/displayLabels'
 
@@ -158,6 +206,11 @@ const activeTaskKey = ref('')
 const loading = ref(false)
 const error = ref(null)
 const taskPolls = new Map()
+const explorerMode = ref('forecast')
+const comparisonLoading = ref(false)
+const comparisonError = ref(null)
+const showcaseScenarios = ref([])
+const sensitivityMetrics = ref([])
 
 const hasExplorerData = computed(() => Boolean(quality.value) || features.value.length > 0 || commands.value.length > 0)
 const hasPositiveFeatures = computed(() => features.value.some(feature => featureImportanceScore(feature) > 0))
@@ -231,6 +284,186 @@ const integritySummary = computed(() => {
     { label: '特征字段完整性', value: missingFieldCount.value === 0 ? '完整' : '需检查', ok: missingFieldCount.value === 0, hint: `${valueOrIssue(quality.value?.schema?.column_count ?? quality.value?.columns?.total)} 个字段参与检查` },
   ]
 })
+
+const comparisonRows = computed(() => {
+  const scenarios = [...showcaseScenarios.value]
+  const maxNet = Math.max(...scenarios.map(s => Math.abs(Number(s.net_incremental_revenue_eur) || 0)), 1)
+  return scenarios
+    .map(row => {
+      const net = Number(row.net_incremental_revenue_eur) || 0
+      const soh = Number(row.soh_end)
+      const constraintsOk = row.constraints_passed !== false
+      const score = clamp(Math.round((net / maxNet) * 50 + 50), 0, 100)
+      const recommended = net >= 0 && constraintsOk
+      const reasons = []
+      if (net < 0) reasons.push(`净增量收益为负（${formatComparisonCurrency(net)}）`)
+      if (!constraintsOk) reasons.push('调度约束未通过')
+      if (!Number.isFinite(soh) || soh < 0.6) reasons.push(`SOC 健康度过低（${formatPercent(soh)}）`)
+      return { ...row, score, recommended, reason: reasons.join('；') || '' }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20)
+})
+
+const dispatchImportanceRows = computed(() => buildDispatchImportanceRows(sensitivityMetrics.value, showcaseScenarios.value))
+const dispatchImportanceOption = computed(() => buildDispatchImportanceOption(dispatchImportanceRows.value))
+
+function buildDispatchImportanceRows(sensitivityRows, scenarioRows) {
+  const rows = Array.isArray(sensitivityRows) ? sensitivityRows : []
+  const factors = [
+    groupedRangeFactor(rows, 'capacity_multiplier', '容量倍率', '按容量倍率分组比较平均增量收益差异'),
+    groupedRangeFactor(rows, 'power_multiplier', '功率倍率', '按功率倍率分组比较平均增量收益差异'),
+    groupedRangeFactor(rows, 'objective_preset', '目标组合', '按目标组合分组比较平均增量收益差异'),
+    numericCorrelationFactor(rows, 'cycle_equivalent_count', '循环强度', '按等效循环次数与增量收益的相关关系估计'),
+    numericCorrelationFactor(rows, 'total_shortfall_kwh', '短缺约束', '按短缺电量与增量收益的相关关系估计'),
+    numericCorrelationFactor(rows, 'total_curtailed_kwh', '弃光影响', '按弃光电量与增量收益的相关关系估计'),
+    numericCorrelationFactor(rows, 'soc_edge_touch_ratio', 'SOC 贴边影响', '按 SOC 贴边比例与增量收益的相关关系估计'),
+    scenarioRangeFactor(scenarioRows),
+  ].filter(Boolean)
+  const maxScore = Math.max(...factors.map(row => row.rawScore), 0)
+  return factors
+    .map(row => ({ ...row, score: maxScore > 0 ? (row.rawScore / maxScore) * 100 : 0 }))
+    .filter(row => row.score > 0)
+    .sort((a, b) => b.score - a.score)
+}
+
+function groupedRangeFactor(rows, field, label, basis) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row[field]
+    const revenue = Number(row.incremental_revenue_eur)
+    if (key === undefined || key === null || key === '' || !Number.isFinite(revenue)) continue
+    const group = groups.get(String(key)) || []
+    group.push(revenue)
+    groups.set(String(key), group)
+  }
+  if (groups.size < 2) return null
+  const means = [...groups.entries()].map(([key, values]) => ({
+    key,
+    mean: values.reduce((sum, value) => sum + value, 0) / values.length,
+  }))
+  const best = [...means].sort((a, b) => b.mean - a.mean)[0]
+  const worst = [...means].sort((a, b) => a.mean - b.mean)[0]
+  return {
+    factor: field,
+    label,
+    rawScore: Math.abs(best.mean - worst.mean),
+    direction: `${best.key} 组平均收益较高`,
+    basis,
+  }
+}
+
+function numericCorrelationFactor(rows, field, label, basis) {
+  const pairs = rows
+    .map(row => ({ x: Number(row[field]), y: Number(row.incremental_revenue_eur) }))
+    .filter(pair => Number.isFinite(pair.x) && Number.isFinite(pair.y))
+  if (pairs.length < 3) return null
+  const xs = pairs.map(pair => pair.x)
+  const ys = pairs.map(pair => pair.y)
+  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length
+  const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length
+  const cov = pairs.reduce((sum, pair) => sum + (pair.x - meanX) * (pair.y - meanY), 0)
+  const sx = Math.sqrt(xs.reduce((sum, value) => sum + (value - meanX) ** 2, 0))
+  const sy = Math.sqrt(ys.reduce((sum, value) => sum + (value - meanY) ** 2, 0))
+  if (!sx || !sy) return null
+  const corr = cov / (sx * sy)
+  const revenueRange = Math.max(...ys) - Math.min(...ys)
+  return {
+    factor: field,
+    label,
+    rawScore: Math.abs(corr) * Math.abs(revenueRange),
+    direction: corr >= 0 ? '数值升高时收益倾向升高' : '数值升高时收益倾向降低',
+    basis,
+  }
+}
+
+function scenarioRangeFactor(rows) {
+  const values = (Array.isArray(rows) ? rows : [])
+    .map(row => Number(row.net_incremental_revenue_eur))
+    .filter(Number.isFinite)
+  if (values.length < 2) return null
+  return {
+    factor: 'scenario_economic_condition',
+    label: '经济情景条件',
+    rawScore: Math.max(...values) - Math.min(...values),
+    direction: '不同收益情景下净增量收益存在差异',
+    basis: '按多收益情景净增量收益区间估计',
+  }
+}
+
+function buildDispatchImportanceOption(rows) {
+  if (!rows.length) return {}
+  const sorted = [...rows].sort((a, b) => a.score - b.score)
+  return {
+    tooltip: {
+      trigger: 'axis',
+      formatter(params) {
+        const item = params?.[0]
+        const row = sorted[item?.dataIndex]
+        if (!row) return ''
+        return [`<strong>${row.label}</strong>`, `相对影响程度：${row.score.toFixed(1)}`, row.direction, row.basis].join('<br/>')
+      },
+    },
+    grid: { left: 150, right: 42, top: 18, bottom: 36 },
+    xAxis: {
+      type: 'value',
+      name: '相对影响程度',
+      max: 100,
+      nameTextStyle: { color: 'rgba(255,255,255,0.74)' },
+      axisLabel: { color: 'rgba(255,255,255,0.74)' },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.10)' } },
+    },
+    yAxis: {
+      type: 'category',
+      data: sorted.map(row => row.label),
+      axisLabel: { color: 'rgba(255,255,255,0.82)' },
+    },
+    series: [
+      {
+        type: 'bar',
+        data: sorted.map((row, index) => ({
+          value: Number(row.score.toFixed(1)),
+          itemStyle: { color: `hsl(${170 + index * 10}, 72%, 54%)` },
+        })),
+        barMaxWidth: 18,
+      },
+    ],
+  }
+}
+
+function scenarioTypeLabel(type) {
+  const map = { baseline: '基准纯套利', price_volatility: '价格波动增强', capacity_revenue: '容量价值叠加', cost_improvement: '退化成本改善', pure_arbitrage_best: '最优纯套利', degradation_aware: '退化约束主动循环', aggressive_baseline: '激进策略对照' }
+  return map[type] || type || '—'
+}
+
+function formatComparisonCurrency(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })} EUR` : '—'
+}
+
+function formatPercent(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—'
+}
+
+function clamp(value, min, max) { return Math.min(Math.max(Number(value), min), max) }
+
+async function loadComparisonData() {
+  comparisonLoading.value = true
+  comparisonError.value = null
+  try {
+    const [showcase, sensitivity] = await Promise.all([
+      fetchShowcaseScenarios().catch(() => []),
+      fetchSensitivityMetrics().catch(() => []),
+    ])
+    showcaseScenarios.value = Array.isArray(showcase) ? showcase : []
+    sensitivityMetrics.value = Array.isArray(sensitivity) ? sensitivity : []
+  } catch (e) {
+    comparisonError.value = e.normalized || normalizeApiError(e)
+  } finally {
+    comparisonLoading.value = false
+  }
+}
 
 function valueOrIssue(value) {
   return value === null || value === undefined || value === '' ? '数据缺失' : value
@@ -447,6 +680,12 @@ async function loadDataExplorer() {
   }
 }
 
+watch(explorerMode, (mode) => {
+  if (mode === 'dispatch' && !showcaseScenarios.value.length && !sensitivityMetrics.value.length) {
+    loadComparisonData()
+  }
+})
+
 onMounted(loadDataExplorer)
 onUnmounted(() => {
   for (const poll of taskPolls.values()) clearInterval(poll)
@@ -491,6 +730,11 @@ onUnmounted(() => {
 .task-history strong.timeout,
 .task-history strong.unknown { color: var(--accent-red); }
 .task-history strong.running { color: var(--accent-cyan); }
+.explorer-tabs { display: flex; align-items: center; }
+.explorer-tabs :deep(.el-radio-button__inner) { font-size: 13px; }
+.scheme-badge { background: rgba(255,255,255,0.08); border-radius: var(--radius-full); color: var(--text-secondary); display: inline-flex; font-size: 11px; font-weight: 700; padding: 2px 8px; white-space: nowrap; }
+.scheme-badge.recommended { background: rgba(0, 255, 136, 0.14); color: var(--accent-green); }
+.scheme-badge.not-recommended { background: rgba(255, 82, 82, 0.12); color: var(--accent-red); }
 
 @media (max-width: 767px) {
   .feat-chart { height: 340px; }

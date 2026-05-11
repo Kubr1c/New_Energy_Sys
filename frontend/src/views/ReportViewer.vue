@@ -1,6 +1,5 @@
 <template>
   <div class="report-viewer">
-    <InsightSummary :title="reportInsight.title" :items="reportInsight.items" :tone="reportInsight.tone" />
 
     <div class="rv-layout">
       <aside class="glass-card stage-list">
@@ -38,7 +37,6 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import InsightSummary from '../components/InsightSummary.vue'
 import PageState from '../components/PageState.vue'
 import { fetchReportMarkdown, fetchReportStages } from '../services/reportService'
 import { normalizeApiError } from '../utils/api'

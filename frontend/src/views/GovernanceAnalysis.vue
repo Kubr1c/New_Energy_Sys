@@ -23,7 +23,6 @@
       @retry="loadSensitivity"
     />
     <template v-else>
-      <InsightSummary :title="governanceInsight.title" :items="governanceInsight.items" :tone="governanceInsight.tone" />
 
       <div class="top-section">
         <ChartCard title="储能配置推荐边界分析">
@@ -38,9 +37,15 @@
           <v-chart class="chart-md" :option="heatmapOption" theme="dark-tech" autoresize />
         </ChartCard>
 
-        <PageSection title="配置详情">
+        <PageSection title="储能配置敏感性明细">
           <el-table :data="sensitivity" style="width:100%" stripe max-height="350" size="small">
-            <el-table-column prop="config_id" label="配置" min-width="180" />
+            <el-table-column prop="config_id" label="配置" min-width="220">
+              <template #default="{ row }">
+                <el-tooltip :content="row.config_id" placement="top">
+                  <span>{{ formatConfigName(row) }}</span>
+                </el-tooltip>
+              </template>
+            </el-table-column>
             <el-table-column prop="capacity_kwh" label="容量 (kWh)" width="105" sortable>
               <template #default="{ row }">{{ Number(row.capacity_kwh).toFixed(2) }}</template>
             </el-table-column>
@@ -77,7 +82,6 @@ import { HeatmapChart, ScatterChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TitleComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
-import InsightSummary from '../components/InsightSummary.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
 import { buildParetoOption, buildRevenueHeatmapOption } from '../charts/governanceCharts'
@@ -97,21 +101,6 @@ const bestConfig = computed(() => {
   const candidates = paretoRows.value.length ? paretoRows.value : sensitivity.value
   return [...candidates].sort((a, b) => Number(b.incremental_revenue_eur || -Infinity) - Number(a.incremental_revenue_eur || -Infinity))[0] || {}
 })
-const governanceInsight = computed(() => {
-  const revenue = Number(bestConfig.value.incremental_revenue_eur)
-  const cycles = Number(bestConfig.value.cycle_equivalent_count)
-  return {
-    title: bestConfig.value.config_id
-      ? `推荐优先关注 ${bestConfig.value.config_id}，其增量收益为 ${formatCurrency(revenue)}。`
-      : '当前没有可用于推荐的储能配置结果。',
-    tone: Number.isFinite(revenue) && revenue >= 0 ? 'positive' : 'warning',
-    items: [
-      `推荐边界配置数量：${paretoRows.value.length} / ${sensitivity.value.length}。`,
-      `该配置循环次数：${Number.isFinite(cycles) ? cycles.toFixed(0) : '数据缺失'}。`,
-      `容量/功率：${formatNumber(bestConfig.value.capacity_kwh)} kWh / ${formatNumber(bestConfig.value.max_charge_kw)} kW。`,
-    ],
-  }
-})
 
 function isTrue(value) {
   return value === true || value === 'True' || value === 'true' || value === 1 || value === '1'
@@ -122,9 +111,32 @@ function formatNumber(value, digits = 2) {
   return Number.isFinite(n) ? n.toFixed(digits) : '数据缺失'
 }
 
-function formatCurrency(value) {
+function parseConfigId(configId) {
+  const raw = String(configId || '')
+  const capMatch = raw.match(/cap(\d+p?\d*)/i)
+  const powMatch = raw.match(/pow(\d+p?\d*)/i)
+  const objMatch = raw.match(/obj(\d+)/i)
+  return {
+    capMultiplier: capMatch ? parseFloat(capMatch[1].replace('p', '.')) : null,
+    powMultiplier: powMatch ? parseFloat(powMatch[1].replace('p', '.')) : null,
+    objPreset: objMatch ? parseInt(objMatch[1], 10) : null,
+  }
+}
+
+function formatMultiplier(value) {
   const n = Number(value)
-  return Number.isFinite(n) ? `${n.toFixed(3)} 欧元` : '数据缺失'
+  return Number.isFinite(n) ? `${n.toFixed(1)} 倍` : '-'
+}
+
+function formatConfigName(row) {
+  const cap = row.capacity_multiplier != null ? row.capacity_multiplier : parseConfigId(row.config_id).capMultiplier
+  const pow = row.power_multiplier != null ? row.power_multiplier : parseConfigId(row.config_id).powMultiplier
+  const obj = row.objective_preset != null ? row.objective_preset : parseConfigId(row.config_id).objPreset
+  const parts = []
+  if (cap != null) parts.push(`容量 ${formatMultiplier(cap)}`)
+  if (pow != null) parts.push(`功率 ${formatMultiplier(pow)}`)
+  if (obj != null) parts.push(`目标组合 ${String(obj).replace(/^objective_?/i, '')}`)
+  return parts.length ? parts.join(' / ') : (row.config_id || '—')
 }
 
 async function loadSensitivity() {

@@ -7,6 +7,7 @@ const frontendDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(frontendDir, '..')
 const frontendPort = Number(process.env.NES_E2E_FRONTEND_PORT || 3060)
 const frontendBaseURL = `http://127.0.0.1:${frontendPort}`
+const skipWebServer = process.env.NES_E2E_SKIP_WEBSERVER === '1'
 const localBrowserCandidates = [
   process.env.NES_E2E_BROWSER_PATH,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -48,7 +49,7 @@ export default defineConfig({
       },
     },
   ],
-  webServer: [
+  webServer: skipWebServer ? undefined : [
     {
       command: 'python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000',
       cwd: projectRoot,

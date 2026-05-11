@@ -61,8 +61,8 @@ let timer = null
 const navItems = [
   { path: '/', label: '系统总览', subtitle: '净增量收益、多情景展示与完整管线', icon: 'DataAnalysis' },
   { path: '/dispatch', label: '储能调度', subtitle: '多收益情景量化展示与退化约束策略评价', icon: 'Setting' },
-  { path: '/models', label: '预测输入', subtitle: '光伏功率预测质量与调度输入说明', icon: 'TrendCharts' },
-  { path: '/governance', label: '配置与退化', subtitle: '容量功率敏感性、退化成本与配置优选', icon: 'Histogram' },
+  { path: '/models', label: '预测分析', subtitle: '光伏功率预测质量与调度输入说明', icon: 'TrendCharts' },
+  { path: '/governance', label: '配置敏感性', subtitle: '容量功率敏感性、退化成本与配置优选', icon: 'Histogram' },
   { path: '/data', label: '数据管理', subtitle: '数据质量、特征贡献与运行任务', icon: 'DataLine' },
   { path: '/reports', label: '项目报告', subtitle: '当前结论、阶段报告与论文材料入口', icon: 'Document' },
   { path: '/inspect', label: '预测验收', subtitle: '预测结果多日对比与误差分析', icon: 'Monitor' },

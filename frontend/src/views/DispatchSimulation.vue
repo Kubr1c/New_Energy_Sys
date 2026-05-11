@@ -11,7 +11,6 @@
       @retry="loadScorecard"
     />
     <template v-else>
-      <InsightSummary :title="dispatchInsight.title" :items="dispatchInsight.items" :tone="dispatchInsight.tone" />
 
       <el-tabs v-model="activeTab" class="dispatch-tabs">
         <el-tab-pane label="调度结论" name="conclusion" lazy>
@@ -27,7 +26,7 @@
                 <el-table-column prop="scenario_name" label="情景名称" min-width="160" show-overflow-tooltip />
                 <el-table-column prop="scenario_type" label="情景类型" width="130">
                   <template #default="{ row }">
-                    <el-tag size="small" :type="row.scenario_type === 'baseline' ? 'info' : ''">{{ scenarioTypeLabel(row.scenario_type) }}</el-tag>
+                    <el-tag size="small" :type="row.scenario_type === 'baseline' ? 'info' : 'primary'">{{ scenarioTypeLabel(row.scenario_type) }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="gross_incremental_revenue_eur" label="毛增量收益" width="120" :formatter="fmtEur" sortable />
@@ -438,14 +437,13 @@
 
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { Download, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { DataAnalysis, Download, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, LineChart, RadarChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, RadarComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
-import InsightSummary from '../components/InsightSummary.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import PageState from '../components/PageState.vue'
 import {

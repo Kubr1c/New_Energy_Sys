@@ -23,7 +23,6 @@
       @retry="loadModels"
     />
     <template v-else>
-      <InsightSummary :title="modelInsight.title" :items="modelInsight.items" :tone="modelInsight.tone" />
 
       <PageSection title="测试集模型排行榜">
         <template #actions>
@@ -94,7 +93,6 @@ import { BarChart, RadarChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, RadarComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
-import InsightSummary from '../components/InsightSummary.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
 import { buildModelBarChartOption, buildModelRadarChartOption, fmtNum, modelColor } from '../charts/modelCharts'

@@ -35,7 +35,7 @@ const props = defineProps({
 const toneClass = computed(() => `tone-${props.tone}`)
 </script>
 
-<style scoped>
+<style>
 .insight-summary {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr);
