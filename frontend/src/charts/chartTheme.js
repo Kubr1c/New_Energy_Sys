@@ -1,3 +1,5 @@
+import { featureSetLabel, modelLabel } from '../utils/displayLabels'
+
 export const chartColors = {
   cyan: '#00d4ff',
   green: '#00f5a0',
@@ -6,10 +8,14 @@ export const chartColors = {
   purple: '#b388ff',
   blue: '#64b5f6',
   yellow: '#ffee58',
+  magenta: '#ff4fd8',
+  teal: '#2dd4bf',
+  indigo: '#818cf8',
 }
 
 export const modelColors = {
-  lightgbm_tuned: chartColors.cyan,
+  lightgbm: chartColors.yellow,
+  lightgbm_tuned: chartColors.yellow,
   xgboost: chartColors.green,
   catboost: chartColors.orange,
   extra_trees: chartColors.purple,
@@ -17,12 +23,16 @@ export const modelColors = {
   ridge: chartColors.red,
   elastic_net: chartColors.yellow,
   persistence: '#8a92a6',
-  cnn_lstm: '#4dd0e1',
-  attention_lstm: '#e040fb',
+  persistence_baseline: '#8a92a6',
+  tcn: chartColors.cyan,
+  dlinear: chartColors.magenta,
+  cnn_lstm: chartColors.teal,
+  attention_lstm: chartColors.indigo,
 }
 
 export function modelColor(name) {
-  return modelColors[name] || chartColors.cyan
+  const key = String(name || '').toLowerCase()
+  return modelColors[key] || chartColors.cyan
 }
 
 export function fmtNum(value, digits = 4) {
@@ -31,11 +41,9 @@ export function fmtNum(value, digits = 4) {
 }
 
 export function shortFeature(featureSet) {
-  const map = {
-    history_only: 'history',
-    full_features_without_target_plus: 'full',
-    weather_history_target_aligned: 'weather',
-    persistence_baseline: 'baseline',
-  }
-  return map[featureSet] || featureSet || '-'
+  return featureSetLabel(featureSet)
+}
+
+export function shortModel(model) {
+  return modelLabel(model)
 }

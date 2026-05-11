@@ -21,6 +21,7 @@ const buildArtifactCheck = read('scripts/check-build-artifacts.mjs')
 const overviewChart = read('src/charts/overviewCharts.js')
 const modelChart = read('src/charts/modelCharts.js')
 const dataExplorerService = read('src/services/dataExplorerService.js')
+const displayLabels = read('src/utils/displayLabels.js')
 const statefulViews = [
   'src/views/OverviewDashboard.vue',
   'src/views/ModelComparison.vue',
@@ -46,6 +47,11 @@ assert(buildArtifactCheck.includes('900'), 'build artifact gate must cap the mai
 assert(overviewChart.includes('buildPredictionChartOption'), 'overview chart option must live outside the view')
 assert(modelChart.includes('buildModelRadarChartOption'), 'model chart option must live outside the view')
 assert(dataExplorerService.includes('fetchDataExplorerBundle'), 'data explorer API calls must live in a page service')
+assert(displayLabels.includes('modelLabel'), 'displayLabels.js must expose modelLabel')
+assert(displayLabels.includes('featureSetLabel'), 'displayLabels.js must expose featureSetLabel')
+assert(displayLabels.includes('experimentLabel'), 'displayLabels.js must expose experimentLabel')
+assert(displayLabels.includes('scenarioLabel'), 'displayLabels.js must expose scenarioLabel')
+assert(displayLabels.includes('configLabel'), 'displayLabels.js must expose configLabel')
 assert(packageJson.includes('"test:e2e"'), 'package.json must expose npm run test:e2e')
 assert(playwrightConfig.includes('webServer'), 'Playwright config must own local frontend/backend webServer startup')
 assert(e2eSpec.includes('admin/admin123'), 'E2E must verify demo credentials are not visible on the login page')
@@ -55,6 +61,54 @@ for (const viewPath of statefulViews) {
   const view = read(viewPath)
   assert(view.includes('PageState'), `${viewPath} must render loading/error/empty states through PageState`)
   assert(view.includes('@retry='), `${viewPath} must expose a retry action for recoverable states`)
+}
+
+const defenseViews = [
+  'src/App.vue',
+  'src/views/OverviewDashboard.vue',
+  'src/views/ModelComparison.vue',
+  'src/views/DataExplorer.vue',
+  'src/views/InspectionDashboard.vue',
+  'src/views/DispatchSimulation.vue',
+  'src/views/ReportViewer.vue',
+]
+const forbiddenVisibleStrings = [
+  'stage',
+  'Stage',
+  'full_features_163',
+  'solar_ramp_171',
+  'synthetic_scenario',
+  'Solar duck-curve proxy',
+  'q1_p10',
+  'q1_p50',
+  'q1_p90',
+  'C0_171feat',
+  'validatetime',
+  'stderr',
+  'stdout',
+  'raw',
+  'wild',
+]
+
+function visibleTemplateText(source) {
+  const template = source.match(/<template>([\s\S]*?)<\/template>/)?.[1] || ''
+  const staticLabels = [...template.matchAll(/\s(?:label|title|placeholder|message)=["']([^"']+)["']/g)]
+    .map(match => match[1])
+    .join('\n')
+  const textNodes = template
+    .replace(/<script[\s\S]*?<\/script>/g, '')
+    .replace(/<style[\s\S]*?<\/style>/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\{\{[\s\S]*?\}\}/g, '')
+    .replace(/<[^>]+>/g, '\n')
+  return `${staticLabels}\n${textNodes}`
+}
+
+for (const viewPath of defenseViews) {
+  const visible = visibleTemplateText(read(viewPath))
+  for (const token of forbiddenVisibleStrings) {
+    assert(!visible.includes(token), `${viewPath} must not expose internal token "${token}" in visible template text`)
+  }
 }
 
 if (failures.length) {

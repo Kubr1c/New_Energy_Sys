@@ -1,0 +1,7 @@
+# Development and validation dependencies.
+#
+# Keep runtime packages in requirements.txt. This file is only for checks that
+# exercise the FastAPI TestClient, pytest fixtures, and repository contracts.
+-r requirements.txt
+pytest>=8.0.0
+httpx>=0.27.0

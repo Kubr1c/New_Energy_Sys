@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import functools
+import math
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,35 @@ def data_dir() -> Path:
 # Generic helpers
 # ---------------------------------------------------------------------------
 
+def _json_safe_scalar(value: Any) -> Any:
+    """Normalize pandas/numpy scalar values before FastAPI JSON serialization."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return value
+
+
+def _dataframe_to_json_records(df: pd.DataFrame) -> list[dict]:
+    """Return records with no NaN/Inf values.
+
+    Pandas keeps float columns as float dtype even after ``where(..., None)``,
+    so NaN can survive and crash Starlette's strict JSON renderer. Converting
+    row values explicitly keeps all API endpoints JSON-compliant.
+    """
+    return [
+        {str(key): _json_safe_scalar(value) for key, value in record.items()}
+        for record in df.to_dict(orient="records")
+    ]
+
+
 @functools.lru_cache(maxsize=64)
 def read_csv_cached(path: str) -> list[dict]:
     """Read a CSV file and return a list of row dicts.  Cached."""
@@ -43,9 +73,7 @@ def read_csv_cached(path: str) -> list[dict]:
     if not p.exists():
         return []
     df = pd.read_csv(p)
-    # Convert NaN / inf to None for JSON serialization
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
+    return _dataframe_to_json_records(df)
 
 
 @functools.lru_cache(maxsize=32)
@@ -65,11 +93,10 @@ def read_parquet_sample(path: str, n: int = 500) -> list[dict]:
     if not p.exists():
         return []
     df = pd.read_parquet(p).head(n)
-    df = df.where(pd.notnull(df), None)
     # Convert timestamps to ISO strings
     for col in df.select_dtypes(include=["datetime64", "datetimetz"]).columns:
         df[col] = df[col].astype(str)
-    return df.to_dict(orient="records")
+    return _dataframe_to_json_records(df)
 
 
 @functools.lru_cache(maxsize=16)
@@ -79,6 +106,23 @@ def read_markdown_cached(path: str) -> str | None:
     if not p.exists():
         return None
     return p.read_text(encoding="utf-8")
+
+
+@functools.lru_cache(maxsize=16)
+def read_stage21_csv_required(path: str) -> list[dict] | None:
+    """Read a Stage21 CSV artifact or return ``None`` when it is missing.
+
+    Most legacy endpoints return an empty list for missing files because the
+    early dashboard treated absent experiments as optional.  Stage21 is a
+    named page-level feature, so a missing artifact must remain distinguishable
+    from a valid-but-empty result.  The API layer converts ``None`` to an
+    explicit HTTP 404.
+    """
+    p = Path(path)
+    if not p.exists():
+        return None
+    df = pd.read_csv(p)
+    return _dataframe_to_json_records(df)
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +152,7 @@ def get_main_model_predictions(limit: int = 2000, offset: int = 0) -> list[dict]
     if not p.exists():
         return []
     df = pd.read_csv(p, skiprows=range(1, offset + 1) if offset else None, nrows=limit)
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
+    return _dataframe_to_json_records(df)
 
 
 def get_main_model_metrics() -> list[dict]:
@@ -165,6 +208,31 @@ def get_rawhide_sensitivity_metrics() -> list[dict]:
 def get_rawhide_degradation_metrics() -> list[dict]:
     """Return S18 degradation summary metrics for net-value presentation."""
     return read_csv_cached(str(_DATA_DIR / "stage18_rawhide_degradation_metrics.csv"))
+
+
+def get_stage21_report() -> dict | None:
+    """Return the Stage21 weather-price dispatch report JSON."""
+    return read_json_cached(str(_DATA_DIR / "stage21_rawhide_weather_price_dispatch_report.json"))
+
+
+def get_stage21_weather_predictions() -> list[dict] | None:
+    """Return Stage21 Rawhide weather-driven PV prediction rows."""
+    return read_stage21_csv_required(str(_DATA_DIR / "stage21_rawhide_weather_predictions.csv"))
+
+
+def get_stage21_price_scenarios() -> list[dict] | None:
+    """Return Stage21 hourly price scenario rows."""
+    return read_stage21_csv_required(str(_DATA_DIR / "stage21_rawhide_price_scenarios.csv"))
+
+
+def get_stage21_dispatch_results() -> list[dict] | None:
+    """Return Stage21 hourly dispatch replay rows for charting."""
+    return read_stage21_csv_required(str(_DATA_DIR / "stage21_rawhide_dispatch_results.csv"))
+
+
+def get_stage21_dispatch_metrics() -> list[dict] | None:
+    """Return Stage21 scenario-level dispatch metrics."""
+    return read_stage21_csv_required(str(_DATA_DIR / "stage21_rawhide_dispatch_metrics.csv"))
 
 
 def get_feature_importance(top_n: int = 30) -> list[dict]:

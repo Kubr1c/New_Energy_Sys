@@ -4,7 +4,7 @@
       v-if="loading"
       type="loading"
       title="正在加载配置治理"
-      message="正在读取储能配置敏感性指标和 Pareto 标记。"
+      message="正在读取储能配置敏感性指标和推荐边界标记。"
     />
     <PageState
       v-else-if="error"
@@ -26,8 +26,8 @@
       <InsightSummary :title="governanceInsight.title" :items="governanceInsight.items" :tone="governanceInsight.tone" />
 
       <div class="top-section">
-        <ChartCard title="储能配置 Pareto 分析">
-          <p class="chart-note">横轴为增量收益，纵轴为循环次数；高亮点代表 Pareto 前沿配置。</p>
+        <ChartCard title="储能配置推荐边界分析">
+          <p class="chart-note">横轴为增量收益，纵轴为循环次数；高亮点代表收益和运行强度更均衡的候选配置。</p>
           <v-chart class="chart-lg" :option="paretoOption" theme="dark-tech" autoresize />
         </ChartCard>
       </div>
@@ -47,7 +47,7 @@
             <el-table-column prop="max_charge_kw" label="功率 (kW)" width="105" sortable>
               <template #default="{ row }">{{ Number(row.max_charge_kw).toFixed(2) }}</template>
             </el-table-column>
-            <el-table-column prop="incremental_revenue_eur" label="增量收益 (€)" width="120" sortable>
+            <el-table-column prop="incremental_revenue_eur" label="仿真增量收益（欧元）" width="150" sortable>
               <template #default="{ row }">
                 <span :class="Number(row.incremental_revenue_eur) >= 0 ? 'pos' : 'neg'">
                   {{ Number(row.incremental_revenue_eur).toFixed(3) }}
@@ -57,9 +57,9 @@
             <el-table-column prop="cycle_equivalent_count" label="循环" width="85" sortable>
               <template #default="{ row }">{{ Number(row.cycle_equivalent_count).toFixed(0) }}</template>
             </el-table-column>
-            <el-table-column prop="pareto_front" label="Pareto" width="80">
+            <el-table-column prop="pareto_front" label="推荐边界" width="100">
               <template #default="{ row }">
-                <span class="pareto-tag" :class="{ active: isTrue(row.pareto_front) }">{{ isTrue(row.pareto_front) ? 'Yes' : '-' }}</span>
+                <span class="pareto-tag" :class="{ active: isTrue(row.pareto_front) }">{{ isTrue(row.pareto_front) ? '是' : '-' }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -106,7 +106,7 @@ const governanceInsight = computed(() => {
       : '当前没有可用于推荐的储能配置结果。',
     tone: Number.isFinite(revenue) && revenue >= 0 ? 'positive' : 'warning',
     items: [
-      `Pareto 前沿配置数量：${paretoRows.value.length} / ${sensitivity.value.length}。`,
+      `推荐边界配置数量：${paretoRows.value.length} / ${sensitivity.value.length}。`,
       `该配置循环次数：${Number.isFinite(cycles) ? cycles.toFixed(0) : '数据缺失'}。`,
       `容量/功率：${formatNumber(bestConfig.value.capacity_kwh)} kWh / ${formatNumber(bestConfig.value.max_charge_kw)} kW。`,
     ],
@@ -124,7 +124,7 @@ function formatNumber(value, digits = 2) {
 
 function formatCurrency(value) {
   const n = Number(value)
-  return Number.isFinite(n) ? `€${n.toFixed(3)}` : '数据缺失'
+  return Number.isFinite(n) ? `${n.toFixed(3)} 欧元` : '数据缺失'
 }
 
 async function loadSensitivity() {

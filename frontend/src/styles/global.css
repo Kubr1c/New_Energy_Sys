@@ -112,9 +112,10 @@ a:hover { color: #4de8ff; }
 
 /* ---- Display Numbers ---- */
 .display-number {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 /* ---- KPI Badge ---- */
@@ -152,7 +153,7 @@ a:hover { color: #4de8ff; }
   --el-table-row-hover-bg-color: rgba(0, 212, 255, 0.06) !important;
   --el-table-border-color: var(--border-glass) !important;
   --el-table-text-color: var(--text-primary) !important;
-  --el-table-header-text-color: var(--text-secondary) !important;
+  --el-table-header-text-color: rgba(255, 255, 255, 0.82) !important;
 }
 .el-input__wrapper {
   background: var(--bg-input) !important;

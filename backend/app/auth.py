@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import time
-import hmac
-import hashlib
-import json
-import base64
-from typing import Optional
 from dataclasses import dataclass
+from typing import Optional
+
+from . import database
+from .db_models import User
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -18,7 +22,7 @@ from dataclasses import dataclass
 _APP_ENV = os.environ.get("NES_APP_ENV", os.environ.get("APP_ENV", "development")).lower()
 _DEFAULT_DEMO_SECRET = "new-energy-sys-demo-secret-2026"
 _SECRET = os.environ.get("NES_JWT_SECRET", _DEFAULT_DEMO_SECRET)
-_TOKEN_EXPIRE_SECONDS = 24 * 3600  # 24 hours
+_TOKEN_EXPIRE_SECONDS = 24 * 3600
 
 if _APP_ENV in {"production", "prod"} and _SECRET == _DEFAULT_DEMO_SECRET:
     raise RuntimeError("NES_JWT_SECRET must be set to a non-default value in production.")
@@ -27,30 +31,18 @@ _DEMO_USERS: dict[str, dict] = {
     "admin": {
         "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
         "role": "admin",
-        "display_name": "系统管理员",
+        "display_name": "System Admin",
     },
     "guest": {
         "password_hash": hashlib.sha256("guest123".encode()).hexdigest(),
         "role": "viewer",
-        "display_name": "访客用户",
+        "display_name": "Guest User",
     },
 }
 
 
-def _load_users() -> dict[str, dict]:
-    """Load login users from env JSON, or use explicit demo users outside production.
-
-    NES_USERS_JSON format:
-      {
-        "admin": {
-          "password_hash": "<sha256 hex>",
-          "role": "admin",
-          "display_name": "系统管理员"
-        }
-      }
-
-    生产环境禁止隐式使用 demo 用户；开发/答辩环境保留 demo 用户，便于本地复现。
-    """
+def _load_file_users() -> dict[str, dict]:
+    """Load file/env users for legacy file-backed development mode."""
     raw_users = os.environ.get("NES_USERS_JSON")
     if raw_users:
         users = json.loads(raw_users)
@@ -64,13 +56,13 @@ def _load_users() -> dict[str, dict]:
             record.setdefault("display_name", username)
         return users
 
-    if _APP_ENV in {"production", "prod"}:
-        raise RuntimeError("NES_USERS_JSON must be configured in production.")
+    if _APP_ENV in {"production", "prod"} and not database.is_database_enabled():
+        raise RuntimeError("NES_USERS_JSON or NES_DATABASE_URL must be configured in production.")
 
     return _DEMO_USERS
 
 
-_USERS: dict[str, dict] = _load_users()
+_FILE_USERS: dict[str, dict] = _load_file_users()
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +74,21 @@ class UserInfo:
     username: str
     role: str
     display_name: str
+
+
+def _get_user_record(username: str) -> dict | None:
+    """Read the active user from MySQL when enabled, otherwise from file mode."""
+    if not database.is_database_enabled():
+        return _FILE_USERS.get(username)
+    with database.session_scope() as session:
+        row = session.get(User, username)
+        if row is None or not row.active:
+            return None
+        return {
+            "password_hash": row.password_hash,
+            "role": row.role,
+            "display_name": row.display_name,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +107,7 @@ def _b64url_decode(s: str) -> bytes:
 
 
 def _sign(payload: str) -> str:
-    return _b64url_encode(
-        hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).digest()
-    )
+    return _b64url_encode(hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).digest())
 
 
 def create_token(username: str, role: str) -> str:
@@ -130,16 +135,16 @@ def verify_token(token: str) -> Optional[UserInfo]:
         if data.get("exp", 0) < time.time():
             return None
         username = data.get("sub", "")
-        user_record = _USERS.get(username)
-        if not user_record:
-            return None
-        return UserInfo(
-            username=username,
-            role=data.get("role", "viewer"),
-            display_name=user_record.get("display_name", username),
-        )
     except Exception:
         return None
+    user_record = _get_user_record(username)
+    if not user_record:
+        return None
+    return UserInfo(
+        username=username,
+        role=str(user_record.get("role") or data.get("role") or "viewer"),
+        display_name=str(user_record.get("display_name") or username),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +153,10 @@ def verify_token(token: str) -> Optional[UserInfo]:
 
 def authenticate(username: str, password: str) -> Optional[str]:
     """Return JWT token string if credentials are valid, else None."""
-    user = _USERS.get(username)
+    user = _get_user_record(username)
     if not user:
         return None
     pw_hash = hashlib.sha256(password.encode()).hexdigest()
-    if not hmac.compare_digest(pw_hash, user["password_hash"]):
+    if not hmac.compare_digest(pw_hash, str(user["password_hash"])):
         return None
-    return create_token(username, user["role"])
+    return create_token(username, str(user["role"]))

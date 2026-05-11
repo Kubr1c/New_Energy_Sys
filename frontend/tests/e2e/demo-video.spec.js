@@ -12,10 +12,9 @@ const recordingViewport = { width: 1920, height: 1080 }
 
 const ROUTES = [
   { nav: '模型评估', marker: '模型排行榜' },
-  { nav: '调度分析', marker: 'Rawhide 策略增量收益' },
-  { nav: '配置治理', marker: '储能配置 Pareto 分析' },
-  { nav: '数据管理', marker: '特征重要性前 20' },
-  { nav: '实验报告', marker: '实验阶段' },
+  { nav: '调度分析', marker: '参考站策略增量收益' },
+  { nav: '配置治理', marker: '储能配置推荐边界分析' },
+  { nav: '数据管理', marker: '特征重要性 Top20' },
 ]
 
 async function pauseForRecording(page, milliseconds = 1200) {
@@ -28,11 +27,11 @@ async function pauseForRecording(page, milliseconds = 1200) {
 async function loginAsAdmin(page, baseURL) {
   await page.goto('/#/login')
   await page.evaluate(() => localStorage.clear())
-  await page.getByPlaceholder('Enter username').fill('admin')
-  await page.getByPlaceholder('Enter password').fill('admin123')
-  await page.getByRole('button', { name: /Sign In/ }).click()
+  await page.getByPlaceholder('请输入用户名').fill('admin')
+  await page.getByPlaceholder('请输入密码').fill('admin123')
+  await page.getByRole('button', { name: /登录系统/ }).click()
   await expect(page).toHaveURL(`${baseURL}/#/`)
-  await expect(page.locator('body')).toContainText('PV', { timeout: 30_000 })
+  await expect(page.locator('body')).toContainText('新能源发电预测与储能调度辅助系统', { timeout: 30_000 })
   await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible()
   await pauseForRecording(page)
 }

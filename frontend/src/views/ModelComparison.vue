@@ -3,13 +3,13 @@
     <PageState
       v-if="loading"
       type="loading"
-      title="正在加载模型对比"
+      title="正在加载模型评估"
       message="正在读取表格模型、深度学习模型和测试集指标。"
     />
     <PageState
       v-else-if="error"
       type="error"
-      title="模型对比加载失败"
+      title="模型评估加载失败"
       :message="error.message"
       retryable
       @retry="loadModels"
@@ -18,61 +18,67 @@
       v-else-if="!allTestMetrics.length"
       type="empty"
       title="暂无模型指标"
-      message="当前接口没有返回测试集模型指标，无法绘制排行榜和雷达图。"
+      message="当前接口没有返回测试集模型指标，无法展示排行榜和图表。"
       retryable
       @retry="loadModels"
     />
     <template v-else>
       <InsightSummary :title="modelInsight.title" :items="modelInsight.items" :tone="modelInsight.tone" />
 
-      <PageSection title="模型排行榜">
+      <PageSection title="测试集模型排行榜">
         <template #actions>
-          <span class="table-hint">默认展示全部记录，图表聚焦前 12 / 前 5</span>
-          <el-select v-model="selectedFeatureSet" size="small" style="width: 200px">
-            <el-option label="全部特征集" value="all" />
-            <el-option label="仅历史特征" value="history_only" />
-            <el-option label="完整特征" value="full_features_without_target_plus" />
-            <el-option label="天气 + 历史" value="weather_history_target_aligned" />
+          <span class="table-hint">默认展示测试集 Top10，误差指标越低表示模型表现越好。</span>
+          <el-select v-model="selectedFeatureSet" size="small" style="width: 220px">
+            <el-option
+              v-for="option in featureSetOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
         </template>
         <el-table
-          :data="rankedMetrics"
+          :data="sortedTopMetrics"
           row-key="rankKey"
           style="width: 100%"
           stripe
           :row-class-name="leaderboardRowClass"
           :default-sort="{ prop: 'nrmse_capacity', order: 'ascending' }"
-          max-height="360"
+          max-height="420"
         >
           <el-table-column label="#" width="60">
             <template #default="{ $index }">{{ $index + 1 }}</template>
           </el-table-column>
           <el-table-column prop="model" label="模型" min-width="150" sortable>
-            <template #default="{ row }"><span :style="{ color: modelColor(row.model) }">{{ row.model }}</span></template>
+            <template #default="{ row }">
+              <span :style="{ color: modelColor(row.model) }">{{ modelLabel(row.model) }}</span>
+            </template>
           </el-table-column>
-          <el-table-column prop="feature_set" label="特征集" min-width="130">
-            <template #default="{ row }"><span class="feat-tag">{{ shortFeature(row.feature_set) }}</span></template>
+          <el-table-column prop="feature_set" label="特征集" min-width="170">
+            <template #default="{ row }"><span class="feat-tag">{{ featureSetLabel(row.feature_set) }}</span></template>
           </el-table-column>
           <el-table-column prop="nrmse_capacity" label="nRMSE" width="110" sortable>
             <template #default="{ row }">{{ fmtNum(row.nrmse_capacity) }}</template>
           </el-table-column>
-          <el-table-column prop="mae_kw" label="MAE (kW)" width="110" sortable>
+          <el-table-column prop="mae_kw" label="MAE (kW)" width="120" sortable>
             <template #default="{ row }">{{ fmtNum(row.mae_kw) }}</template>
           </el-table-column>
-          <el-table-column prop="rmse_kw" label="RMSE (kW)" width="110" sortable>
+          <el-table-column prop="rmse_kw" label="RMSE (kW)" width="120" sortable>
             <template #default="{ row }">{{ fmtNum(row.rmse_kw) }}</template>
           </el-table-column>
-          <el-table-column prop="daytime_nrmse_capacity" label="Day nRMSE" width="120" sortable>
+          <el-table-column prop="daytime_nrmse_capacity" label="日间 nRMSE" width="130" sortable>
             <template #default="{ row }">{{ fmtNum(row.daytime_nrmse_capacity) }}</template>
           </el-table-column>
         </el-table>
       </PageSection>
 
       <div class="chart-row">
-        <ChartCard title="模型 nRMSE 对比">
+        <ChartCard title="测试集 nRMSE 对比">
+          <p class="chart-note">柱状图与排行榜使用同一份 Top10 排序数据；数值越低表示误差越小。</p>
           <v-chart class="chart" :option="barChartOption" theme="dark-tech" autoresize />
         </ChartCard>
-        <ChartCard title="多指标雷达图">
+        <ChartCard title="多指标误差雷达图">
+          <p class="chart-note">雷达图展示默认 Top10 中前 5 个模型的误差结构，用于解释不同模型的表现差异。</p>
           <v-chart class="chart" :option="radarChartOption" theme="dark-tech" autoresize />
         </ChartCard>
       </div>
@@ -81,7 +87,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, RadarChart } from 'echarts/charts'
@@ -91,28 +97,41 @@ import ChartCard from '../components/ChartCard.vue'
 import InsightSummary from '../components/InsightSummary.vue'
 import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
-import { buildModelBarChartOption, buildModelRadarChartOption, fmtNum, modelColor, shortFeature } from '../charts/modelCharts'
+import { buildModelBarChartOption, buildModelRadarChartOption, fmtNum, modelColor } from '../charts/modelCharts'
 import { fetchModelComparison } from '../services/modelService'
 import { normalizeApiError } from '../utils/api'
+import { featureSetLabel, modelLabel } from '../utils/displayLabels'
 
 use([CanvasRenderer, BarChart, RadarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, RadarComponent])
+
+const PAGE_SIZE = 10
 
 const tabularMetrics = ref([])
 const dlMetrics = ref([])
 const selectedFeatureSet = ref('all')
+const currentPage = ref(1)
 const loading = ref(false)
 const error = ref(null)
 
 const allTestMetrics = computed(() => [...tabularMetrics.value, ...dlMetrics.value].filter(row => row.split === 'test'))
+const featureSetOptions = computed(() => {
+  const sets = [...new Set(allTestMetrics.value.map(row => row.feature_set).filter(Boolean))]
+    .sort((a, b) => featureSetLabel(a).localeCompare(featureSetLabel(b), 'zh-CN'))
+  return [
+    { label: '全部特征集', value: 'all' },
+    ...sets.map(value => ({ label: featureSetLabel(value), value })),
+  ]
+})
 const filteredTestMetrics = computed(() => {
   if (selectedFeatureSet.value === 'all') return allTestMetrics.value
   return allTestMetrics.value.filter(row => row.feature_set === selectedFeatureSet.value)
 })
-const rankedMetrics = computed(() => [...filteredTestMetrics.value]
+const sortedMetrics = computed(() => [...filteredTestMetrics.value]
   .sort((a, b) => Number(a.nrmse_capacity || Infinity) - Number(b.nrmse_capacity || Infinity))
   .map((row, index) => ({ ...row, rankKey: `${row.model}-${row.feature_set}-${index}` })))
-const bestMetric = computed(() => rankedMetrics.value[0] || {})
-const baselineMetric = computed(() => rankedMetrics.value.find(row => /linear|baseline/i.test(String(row.model))) || rankedMetrics.value[rankedMetrics.value.length - 1] || {})
+const sortedTopMetrics = computed(() => sortedMetrics.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE))
+const bestMetric = computed(() => sortedMetrics.value[0] || {})
+const baselineMetric = computed(() => sortedMetrics.value.find(row => /persistence|baseline|linear/i.test(String(row.model))) || sortedMetrics.value[sortedMetrics.value.length - 1] || {})
 const modelInsight = computed(() => {
   const bestNrmse = Number(bestMetric.value.nrmse_capacity)
   const baseNrmse = Number(baselineMetric.value.nrmse_capacity)
@@ -121,19 +140,23 @@ const modelInsight = computed(() => {
     : '无法计算'
   return {
     title: bestMetric.value.model
-      ? `${bestMetric.value.model} 当前排名第一，测试集 nRMSE 为 ${fmtNum(bestMetric.value.nrmse_capacity)}。`
+      ? `测试集最优模型为 ${modelLabel(bestMetric.value.model)}，nRMSE 为 ${fmtNum(bestMetric.value.nrmse_capacity)}。`
       : '当前筛选条件下没有可用模型指标。',
     tone: bestMetric.value.model ? 'positive' : 'warning',
     items: [
-      `推荐特征集：${shortFeature(bestMetric.value.feature_set) || '数据缺失'}。`,
-      `相对参考模型 ${baselineMetric.value.model || '数据缺失'} 的 nRMSE 改善：${improvement}。`,
-      `当前筛选范围包含 ${rankedMetrics.value.length} 条测试集记录。`,
+      `最优特征集：${featureSetLabel(bestMetric.value.feature_set)}。`,
+      `相对 ${modelLabel(baselineMetric.value.model)} 的 nRMSE 改善：${improvement}。`,
+      `当前筛选范围包含 ${sortedMetrics.value.length} 条测试集记录；默认页显示前 ${PAGE_SIZE} 条。`,
     ],
   }
 })
 
-const barChartOption = computed(() => buildModelBarChartOption(rankedMetrics.value))
-const radarChartOption = computed(() => buildModelRadarChartOption(rankedMetrics.value))
+const barChartOption = computed(() => buildModelBarChartOption(sortedTopMetrics.value))
+const radarChartOption = computed(() => buildModelRadarChartOption(sortedTopMetrics.value))
+
+watch(selectedFeatureSet, () => {
+  currentPage.value = 1
+})
 
 function leaderboardRowClass({ rowIndex }) {
   return rowIndex < 3 ? 'top-model-row' : ''
@@ -146,6 +169,7 @@ async function loadModels() {
     const data = await fetchModelComparison()
     tabularMetrics.value = data.tabularMetrics
     dlMetrics.value = data.deepLearningMetrics
+    currentPage.value = 1
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
   } finally {
@@ -160,9 +184,11 @@ onMounted(loadModels)
 .model-comparison { display: flex; flex-direction: column; gap: var(--space-lg); }
 .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
 .chart { height: 360px; width: 100%; }
-.table-hint { color: var(--text-secondary); font-size: 12px; }
+.table-hint,
+.chart-note { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.chart-note { margin-bottom: var(--space-md); }
 .feat-tag {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-full);
   color: var(--text-secondary);
   font-size: 11px;

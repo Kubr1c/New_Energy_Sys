@@ -12,11 +12,14 @@ import threading
 import time
 import uuid
 import sys
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from .data_loader import project_root
+
+logger = logging.getLogger("new_energy_sys.tasks")
 
 # ---------------------------------------------------------------------------
 # Task registry
@@ -115,6 +118,7 @@ def _run_in_background(task: TaskRecord, cmd: list[str], cwd: Path):
     """Thread target that runs a subprocess."""
     task.status = "running"
     task.started_at = time.time()
+    logger.info("task_started task_id=%s command=%s", task.task_id, task.command)
     try:
         env = {"PYTHONPATH": str(cwd / "src")}
         import os as _os
@@ -132,12 +136,24 @@ def _run_in_background(task: TaskRecord, cmd: list[str], cwd: Path):
         task.stdout_tail = result.stdout[-2000:] if result.stdout else ""
         task.stderr_tail = result.stderr[-2000:] if result.stderr else ""
         task.status = "completed" if result.returncode == 0 else "failed"
+        if result.returncode == 0:
+            logger.info("task_completed task_id=%s command=%s", task.task_id, task.command)
+        else:
+            logger.error(
+                "task_failed task_id=%s command=%s return_code=%s stderr_tail=%s",
+                task.task_id,
+                task.command,
+                result.returncode,
+                task.stderr_tail[-500:],
+            )
     except subprocess.TimeoutExpired:
         task.status = "failed"
         task.stderr_tail = "Task timed out after 600 seconds."
+        logger.error("task_timeout task_id=%s command=%s", task.task_id, task.command)
     except Exception as exc:
         task.status = "failed"
         task.stderr_tail = str(exc)
+        logger.exception("task_exception task_id=%s command=%s", task.task_id, task.command)
     finally:
         task.finished_at = time.time()
 

@@ -11,17 +11,26 @@ from __future__ import annotations
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
 from pathlib import Path
 from typing import Optional
 import dataclasses
+import logging
 import os
+import time
 
 import numpy as np
 import pandas as pd
 
-from . import auth, data_loader, tasks
+from . import auth, display_data as data_loader, tasks, weather_experiment
+from .db_repository import DatabaseDataMissing
+
+logger = logging.getLogger("new_energy_sys.api")
+logging.basicConfig(
+    level=os.environ.get("NES_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 # ---------------------------------------------------------------------------
 # App
@@ -36,7 +45,7 @@ app = FastAPI(
 def _get_cors_origins() -> list[str]:
     """Read CORS whitelist from env and reject wildcard credentials in production."""
     app_env = os.environ.get("NES_APP_ENV", os.environ.get("APP_ENV", "development")).lower()
-    raw_origins = os.environ.get("NES_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+    raw_origins = os.environ.get("NES_CORS_ORIGINS", "http://127.0.0.1:3060")
     origins = [item.strip() for item in raw_origins.split(",") if item.strip()]
     if app_env in {"production", "prod"} and ("*" in origins or not origins):
         raise RuntimeError("NES_CORS_ORIGINS must be an explicit whitelist in production.")
@@ -51,6 +60,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(DatabaseDataMissing)
+async def handle_database_data_missing(request: Request, exc: DatabaseDataMissing):
+    """Expose missing MySQL imports as explicit API errors in DB mode."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log API request latency and failure status for lightweight operations QA."""
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        logger.exception(
+            "request_failed method=%s path=%s elapsed_ms=%.2f",
+            request.method,
+            request.url.path,
+            elapsed_ms,
+        )
+        raise
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    logger.info(
+        "request_completed method=%s path=%s status_code=%s elapsed_ms=%.2f",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -59,6 +100,26 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+
+class WeatherExperimentRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    dispatch_date: str | None = Field(None, alias="dispatchDate")
+    horizon_hours: int = Field(24, alias="horizonHours")
+    weather_scenario: str = Field("realtime", alias="weatherScenario")
+    price_scenario: str = Field("solar_duck_curve", alias="priceScenario")
+    battery_energy_kwh: float = Field(2000.0, alias="batteryEnergyKwh")
+    battery_power_kw: float = Field(1000.0, alias="batteryPowerKw")
+    charge_efficiency: float = Field(0.95, alias="chargeEfficiency")
+    discharge_efficiency: float = Field(0.95, alias="dischargeEfficiency")
+    initial_soc: float = Field(0.5, alias="initialSoc")
+    soc_min: float = Field(0.1, alias="socMin")
+    soc_max: float = Field(0.9, alias="socMax")
+    objective: str = "balanced"
+    algorithm: str = "rolling"
+    latitude: float = weather_experiment.DEFAULT_LATITUDE
+    longitude: float = weather_experiment.DEFAULT_LONGITUDE
+    capacity_kw: float = Field(weather_experiment.DEFAULT_CAPACITY_KW, alias="capacityKw")
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> auth.UserInfo:
     """Dependency: extract and verify JWT from Authorization header."""
@@ -153,6 +214,10 @@ async def inspection_metadata(user: auth.UserInfo = Depends(get_current_user)):
 
     Reads directly from the parquet to avoid hardcoding values.
     """
+    db_payload = data_loader.inspection_metadata()
+    if db_payload is not None:
+        return db_payload
+
     df = data_loader.load_inspection_parquet()
 
     # Build experiment descriptors from first row of each group
@@ -214,6 +279,16 @@ async def inspection_inspect(
     dict
         ``{"data": [...], "daily_summary": {...}}``
     """
+    db_payload = data_loader.inspection_data(
+        start=start,
+        end=end,
+        horizons=horizons,
+        experiments=experiments,
+        granularity=granularity,
+    )
+    if db_payload is not None:
+        return db_payload
+
     df = data_loader.load_inspection_parquet()
 
     # --- Half-open interval filter on valid_time ---
@@ -362,6 +437,138 @@ def get_rawhide_sensitivity_metrics(user: auth.UserInfo = Depends(get_current_us
 @app.get("/api/rawhide/degradation-metrics")
 def get_rawhide_degradation_metrics(user: auth.UserInfo = Depends(get_current_user)):
     return data_loader.get_rawhide_degradation_metrics()
+
+
+def _require_stage21_artifact(data, artifact_name: str):
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Missing Stage21 artifact: {artifact_name}")
+    return data
+
+
+@app.get("/api/stage21/report")
+def get_stage21_report(user: auth.UserInfo = Depends(get_current_user)):
+    return _require_stage21_artifact(
+        data_loader.get_stage21_report(),
+        "stage21_rawhide_weather_price_dispatch_report.json",
+    )
+
+
+@app.get("/api/stage21/weather-predictions")
+def get_stage21_weather_predictions(user: auth.UserInfo = Depends(get_current_user)):
+    return _require_stage21_artifact(
+        data_loader.get_stage21_weather_predictions(),
+        "stage21_rawhide_weather_predictions.csv",
+    )
+
+
+@app.get("/api/stage21/price-scenarios")
+def get_stage21_price_scenarios(user: auth.UserInfo = Depends(get_current_user)):
+    return _require_stage21_artifact(
+        data_loader.get_stage21_price_scenarios(),
+        "stage21_rawhide_price_scenarios.csv",
+    )
+
+
+@app.get("/api/stage21/dispatch-results")
+def get_stage21_dispatch_results(user: auth.UserInfo = Depends(get_current_user)):
+    return _require_stage21_artifact(
+        data_loader.get_stage21_dispatch_results(),
+        "stage21_rawhide_dispatch_results.csv",
+    )
+
+
+@app.get("/api/stage21/dispatch-metrics")
+def get_stage21_dispatch_metrics(user: auth.UserInfo = Depends(get_current_user)):
+    return _require_stage21_artifact(
+        data_loader.get_stage21_dispatch_metrics(),
+        "stage21_rawhide_dispatch_metrics.csv",
+    )
+
+
+@app.get("/api/weather/forecast")
+def get_realtime_weather_forecast(
+    latitude: float = weather_experiment.DEFAULT_LATITUDE,
+    longitude: float = weather_experiment.DEFAULT_LONGITUDE,
+    forecast_hours: int = 72,
+    user: auth.UserInfo = Depends(get_current_user),
+):
+    try:
+        return weather_experiment.fetch_open_meteo_forecast(
+            latitude=latitude,
+            longitude=longitude,
+            forecast_hours=forecast_hours,
+        )
+    except weather_experiment.WeatherExperimentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/dispatch/weather-experiment/run")
+def run_weather_dispatch_experiment(
+    req: WeatherExperimentRequest,
+    user: auth.UserInfo = Depends(get_current_user),
+):
+    try:
+        return weather_experiment.run_weather_dispatch_experiment(
+            weather_experiment.ExperimentParams(
+                dispatch_date=req.dispatch_date,
+                horizon_hours=req.horizon_hours,
+                weather_scenario=req.weather_scenario,
+                price_scenario=req.price_scenario,
+                battery_energy_kwh=req.battery_energy_kwh,
+                battery_power_kw=req.battery_power_kw,
+                charge_efficiency=req.charge_efficiency,
+                discharge_efficiency=req.discharge_efficiency,
+                initial_soc=req.initial_soc,
+                soc_min=req.soc_min,
+                soc_max=req.soc_max,
+                objective=req.objective,
+                algorithm=req.algorithm,
+                latitude=req.latitude,
+                longitude=req.longitude,
+                capacity_kw=req.capacity_kw,
+            )
+        )
+    except weather_experiment.WeatherExperimentError as exc:
+        raise HTTPException(status_code=503, detail=weather_experiment.structured_error(exc)) from exc
+
+
+@app.get("/api/dispatch/weather-experiment/runs")
+def list_weather_dispatch_experiment_runs(
+    limit: int = 20,
+    user: auth.UserInfo = Depends(get_current_user),
+):
+    return weather_experiment.list_run_records(limit=limit)
+
+
+@app.get("/api/dispatch/weather-experiment/runs/{run_id}")
+def get_weather_dispatch_experiment_run(
+    run_id: str,
+    user: auth.UserInfo = Depends(get_current_user),
+):
+    record = weather_experiment.get_run_record(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Weather experiment run not found: {run_id}")
+    return record
+
+
+@app.get("/api/dispatch/weather-experiment/runs/{run_id}/export")
+def export_weather_dispatch_experiment_run(
+    run_id: str,
+    format: str = "json",
+    user: auth.UserInfo = Depends(get_current_user),
+):
+    record = weather_experiment.get_run_record(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Weather experiment run not found: {run_id}")
+    normalized_format = format.lower()
+    if normalized_format not in {"json", "csv"}:
+        raise HTTPException(status_code=400, detail="format must be json or csv")
+    filename, media_type, content = weather_experiment.export_run_record(record, format_name=normalized_format)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/features/importance")

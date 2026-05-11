@@ -5,10 +5,15 @@ export function normalizeApiError(err) {
   const status = err.response?.status ?? 0
   const detail = err.response?.data?.detail
   const fallback = status === 403 ? '当前账号权限不足' : '请求失败，请稍后重试'
+  const structured = detail && typeof detail === 'object' ? detail : {}
 
   return {
     status,
-    message: typeof detail === 'string' ? detail : fallback,
+    message: typeof detail === 'string' ? detail : structured.message || fallback,
+    errorCode: structured.error_code || null,
+    provider: structured.provider || null,
+    retryable: structured.retryable ?? null,
+    suggestedAction: structured.suggested_action || null,
     requestId: err.response?.headers?.['x-request-id'] || null,
     isAuthError: status === 401,
   }

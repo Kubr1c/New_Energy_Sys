@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 
 def main() -> int:
+    project_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(project_root))
+
     # The demo credentials are allowed only outside production. Smoke tests run
     # in development mode so they can validate the packaged demo contract.
     os.environ.setdefault("NES_APP_ENV", "development")
@@ -34,11 +38,25 @@ def main() -> int:
 
     endpoints = [
         "/api/config",
+        "/api/models/tabular",
+        "/api/models/deep-learning",
         "/api/models/main",
         "/api/predictions/main?limit=5",
         "/api/reports/list",
         "/api/tasks/commands",
+        "/api/dispatch/weather-experiment/runs?limit=5",
     ]
+    stage21_report = project_root / "data/processed/pvdaq_nsrdb_2020_2022/stage21_rawhide_weather_price_dispatch_report.json"
+    if stage21_report.exists():
+        endpoints.extend(
+            [
+                "/api/stage21/report",
+                "/api/stage21/weather-predictions",
+                "/api/stage21/price-scenarios",
+                "/api/stage21/dispatch-results",
+                "/api/stage21/dispatch-metrics",
+            ]
+        )
     for endpoint in endpoints:
         response = client.get(endpoint, headers=headers)
         if response.status_code != 200:

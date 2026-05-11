@@ -1,18 +1,17 @@
 import api from '../utils/api'
 
 export async function fetchOverviewBundle() {
-  const [configRes, metricsRes] = await Promise.all([
+  const [configRes, metricsRes, qualityRes, dispatchRes] = await Promise.allSettled([
     api.get('/api/config'),
     api.get('/api/models/main'),
+    api.get('/api/data/quality'),
+    api.get('/api/rawhide/dispatch-metrics'),
   ])
 
   return {
-    siteConfig: configRes.data || {},
-    mainMetrics: metricsRes.data || [],
+    siteConfig: configRes.status === 'fulfilled' ? (configRes.value.data || {}) : {},
+    mainMetrics: metricsRes.status === 'fulfilled' ? (metricsRes.value.data || []) : [],
+    quality: qualityRes.status === 'fulfilled' ? (qualityRes.value.data || {}) : {},
+    dispatchMetrics: dispatchRes.status === 'fulfilled' ? (dispatchRes.value.data || []) : [],
   }
-}
-
-export async function fetchMainPredictions(limit) {
-  const res = await api.get('/api/predictions/main', { params: { limit } })
-  return res.data || []
 }

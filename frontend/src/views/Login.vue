@@ -6,28 +6,28 @@
     <div class="login-card glass-card">
       <div class="login-header">
         <div class="login-logo">⚡</div>
-        <h1 class="login-title">NES Platform</h1>
+        <h1 class="login-title">新能源储能调度系统</h1>
         <p class="login-subtitle">基于深度学习的新能源储能侧优化调度系统</p>
-        <p class="login-subtitle-en">Deep Learning-based New Energy Storage Dispatch System</p>
+        <p class="login-subtitle-en">光伏预测、储能调度与策略评估一体化平台</p>
       </div>
 
       <form class="login-form" @submit.prevent="handleLogin">
         <div class="form-group">
-          <label>用户名 Username</label>
+          <label>用户名</label>
           <div class="input-wrapper">
             <el-icon class="input-icon"><User /></el-icon>
-            <input v-model="username" type="text" placeholder="Enter username" autocomplete="username" />
+            <input v-model="username" type="text" placeholder="请输入用户名" autocomplete="username" />
           </div>
         </div>
 
         <div class="form-group">
-          <label>密码 Password</label>
+          <label>密码</label>
           <div class="input-wrapper">
             <el-icon class="input-icon"><Lock /></el-icon>
             <input
               v-model="password"
               type="password"
-              placeholder="Enter password"
+              placeholder="请输入密码"
               autocomplete="current-password"
               @keyup.enter="handleLogin"
             />
@@ -35,8 +35,8 @@
         </div>
 
         <button type="submit" class="login-btn" :disabled="loading">
-          <span v-if="!loading">登录 Sign In</span>
-          <span v-else>Signing in...</span>
+          <span v-if="!loading">登录系统</span>
+          <span v-else>正在登录...</span>
         </button>
 
         <p v-if="error" class="login-error">{{ error }}</p>

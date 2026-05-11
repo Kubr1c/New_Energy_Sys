@@ -7,14 +7,14 @@ export function buildParetoOption(sensitivity) {
   return {
     tooltip: {
       trigger: 'item',
-      formatter: point => `${point.data[3]}<br/>Revenue: €${Number(point.data[0]).toFixed(3)}<br/>Cycles: ${Number(point.data[1]).toFixed(0)}<br/>Shortfall: ${Number(point.data[2]).toFixed(1)} kWh`,
+      formatter: point => `${point.data[3]}<br/>仿真增量收益: ${Number(point.data[0]).toFixed(3)} 欧元<br/>循环次数: ${Number(point.data[1]).toFixed(0)}<br/>缺口电量: ${Number(point.data[2]).toFixed(1)} kWh`,
     },
     grid: { left: 66, right: 36, top: 36, bottom: 58 },
-    xAxis: { type: 'value', name: 'Incremental Revenue (€)', nameLocation: 'center', nameGap: 34 },
-    yAxis: { type: 'value', name: 'Cycle Count' },
+    xAxis: { type: 'value', name: '仿真增量收益（欧元）', nameLocation: 'center', nameGap: 34 },
+    yAxis: { type: 'value', name: '循环次数' },
     series: [
       {
-        name: 'Pareto Front',
+        name: '推荐边界',
         type: 'scatter',
         data: pareto.map(row => [
           Number(row.incremental_revenue_eur),
@@ -26,7 +26,7 @@ export function buildParetoOption(sensitivity) {
         itemStyle: { color: '#00f5a0', shadowBlur: 8, shadowColor: 'rgba(0,245,160,0.35)' },
       },
       {
-        name: 'Non-Pareto',
+        name: '其他配置',
         type: 'scatter',
         data: nonPareto.map(row => [
           Number(row.incremental_revenue_eur),
@@ -65,11 +65,11 @@ export function buildRevenueHeatmapOption(sensitivity) {
 
   return {
     tooltip: {
-      formatter: point => `Cap x${capSet[point.data[0]]}, Pow x${powSet[point.data[1]]}<br/>Avg Incr. Revenue: €${point.data[2]}`,
+      formatter: point => `容量 x${capSet[point.data[0]]}, 功率 x${powSet[point.data[1]]}<br/>平均仿真增量收益: ${point.data[2]} 欧元`,
     },
     grid: { left: 86, right: 86, top: 28, bottom: 44 },
-    xAxis: { type: 'category', data: capSet.map(capacity => `x${capacity}`), name: 'Capacity Multiplier' },
-    yAxis: { type: 'category', data: powSet.map(power => `x${power}`), name: 'Power Multiplier' },
+    xAxis: { type: 'category', data: capSet.map(capacity => `x${capacity}`), name: '容量倍率' },
+    yAxis: { type: 'category', data: powSet.map(power => `x${power}`), name: '功率倍率' },
     visualMap: {
       min: -0.2,
       max: 2,
@@ -84,7 +84,7 @@ export function buildRevenueHeatmapOption(sensitivity) {
       {
         type: 'heatmap',
         data: heatData,
-        label: { show: true, color: '#fff', fontSize: 11, formatter: point => `€${point.data[2]}` },
+        label: { show: true, color: '#fff', fontSize: 11, formatter: point => `${point.data[2]} 欧元` },
         emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,212,255,0.5)' } },
       },
     ],

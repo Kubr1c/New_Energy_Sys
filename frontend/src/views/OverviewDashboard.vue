@@ -4,7 +4,7 @@
       v-if="loading"
       type="loading"
       title="正在加载系统总览"
-      message="正在读取站点配置、主模型指标和预测曲线。"
+      message="正在读取站点配置、模型指标和预测曲线数据。"
     />
     <PageState
       v-else-if="error"
@@ -18,47 +18,86 @@
       v-else-if="!hasOverviewData"
       type="empty"
       title="暂无系统总览数据"
-      message="后端未返回站点配置、模型指标或预测曲线，请检查实验产物是否已生成。"
+      message="后端未返回站点配置、模型指标或预测曲线，请检查展示数据是否已经生成。"
       retryable
       @retry="loadData"
     />
     <template v-else>
       <InsightSummary :title="overviewInsight.title" :items="overviewInsight.items" :tone="overviewInsight.tone" />
 
+      <section class="overview-intro glass-panel">
+        <div>
+          <span class="intro-kicker">项目总览</span>
+          <h1>新能源发电预测与储能调度辅助系统</h1>
+          <p>系统面向新能源发电与储能调度场景，集成数据管理、功率预测、模型评估与调度仿真功能，用于辅助分析光伏出力变化并生成储能充放电策略。</p>
+        </div>
+        <div class="entry-grid" aria-label="功能入口">
+          <button v-for="entry in featureEntries" :key="entry.path" type="button" class="entry-btn" @click="$router.push(entry.path)">
+            <el-icon :size="18"><component :is="entry.icon" /></el-icon>
+            <span>{{ entry.label }}</span>
+          </button>
+        </div>
+      </section>
+
       <MetricGrid :items="kpiCards" min-width="220px" />
 
       <div class="main-row">
-        <ChartCard title="PV 功率预测对比">
+        <ChartCard title="预测效果概览">
           <template #actions>
-            <el-select v-model="predDays" size="small" style="width: 96px" @change="loadPredictions">
-              <el-option label="7 天" :value="168" />
-              <el-option label="14 天" :value="336" />
-              <el-option label="30 天" :value="720" />
-            </el-select>
+            <div class="overview-chart-actions">
+              <el-button data-testid="overview-prev-day" size="small" class="overview-date-nav" :disabled="isAtMinDate" @click="goDate(-1)">
+                <el-icon><ArrowLeft /></el-icon>
+              </el-button>
+              <el-date-picker
+                v-model="selectedDate"
+                type="date"
+                size="small"
+                :disabled-date="disableDate"
+                value-format="YYYY-MM-DD"
+                format="YYYY-MM-DD"
+                class="overview-date-picker"
+                @change="loadInspectionData"
+              />
+              <el-button data-testid="overview-next-day" size="small" class="overview-date-nav" :disabled="isAtMaxDate" @click="goDate(1)">
+                <el-icon><ArrowRight /></el-icon>
+              </el-button>
+
+              <el-checkbox-group v-model="selectedHorizons" class="overview-horizons" @change="handleHorizonsChange">
+                <el-checkbox v-for="h in availableHorizons" :key="h" :label="h" :value="h" size="small">
+                  <span :style="{ color: horizonColor(h) }">t+{{ h }}h</span>
+                </el-checkbox>
+              </el-checkbox-group>
+
+              <el-select v-model="selectedScenarioMode" size="small" class="overview-select">
+                <el-option v-for="option in scenarioOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </div>
           </template>
-          <v-chart class="main-chart" :option="predChartOption" theme="dark-tech" autoresize />
+
+          <PageState v-if="!inspectionRows.length" type="empty" title="当前窗口暂无预测曲线" message="请调整日期、预测时长或天气场景。" />
+          <v-chart v-else class="main-chart overview-inspection-chart" :option="predChartOption" theme="dark-tech" autoresize />
         </ChartCard>
 
         <div class="summary-column">
           <section class="glass-card summary-card">
             <h3>站点信息</h3>
-            <div class="detail-row"><span>Site</span><strong>PVDAQ System 10</strong></div>
-            <div class="detail-row"><span>Location</span><strong>{{ locationText }}</strong></div>
-            <div class="detail-row"><span>Period</span><strong>2020-01 ~ 2022-12</strong></div>
-            <div class="detail-row"><span>Main Model</span><strong class="accent">LightGBM tuned</strong></div>
+            <div class="detail-row"><span>数据来源</span><strong>新能源发电与气象数据</strong></div>
+            <div class="detail-row"><span>地理位置</span><strong>{{ locationText }}</strong></div>
+            <div class="detail-row"><span>覆盖周期</span><strong>2020-01 ~ 2022-12</strong></div>
+            <div class="detail-row"><span>当前展示模型</span><strong class="accent">{{ currentDisplayModelName }}</strong></div>
           </section>
 
           <section class="glass-card summary-card">
-            <h3>运行摘要</h3>
-            <div class="status-line good">主模型测试集 nRMSE {{ metricText(mainMetric.nrmse_capacity) }}</div>
-            <div class="status-line good">日间 nRMSE {{ metricText(mainMetric.daytime_nrmse_capacity) }}</div>
-            <div class="status-line muted">预测曲线 {{ predictions.length.toLocaleString('zh-CN') }} 个时间点</div>
+            <h3>模型口径说明</h3>
+            <div class="status-line good">当前展示模型：{{ currentDisplayModelName }}</div>
+            <div class="status-line good">测试集最优模型：{{ bestTestModelName }}</div>
+            <div class="status-line muted">首页展示模型用于当前曲线展示和调度联动；模型评估页展示测试集最优结果。</div>
           </section>
 
           <section class="glass-card pipeline-card">
-            <h3>技术路线</h3>
+            <h3>功能流程</h3>
             <div class="pipeline-grid">
-              <span v-for="stage in pipelineStages" :key="stage.id">{{ stage.id }} {{ stage.name }}</span>
+              <span v-for="item in pipelineStages" :key="item.name">{{ item.name }}</span>
             </div>
           </section>
         </div>
@@ -71,88 +110,196 @@
 import { computed, onMounted, ref } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart } from 'echarts/charts'
-import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent } from 'echarts/components'
+import { BarChart, LineChart } from 'echarts/charts'
+import { DataZoomComponent, GridComponent, LegendComponent, MarkAreaComponent, MarkLineComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
+import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import ChartCard from '../components/ChartCard.vue'
 import InsightSummary from '../components/InsightSummary.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import PageState from '../components/PageState.vue'
-import { buildPredictionChartOption } from '../charts/overviewCharts'
-import { fetchMainPredictions, fetchOverviewBundle } from '../services/overviewService'
+import { buildInspectionChart } from '../charts/inspectionCharts'
+import { fetchInspectionData, fetchInspectionMetadata } from '../services/inspectionService'
+import { fetchOverviewBundle } from '../services/overviewService'
+import { fetchModelComparison } from '../services/modelService'
 import { normalizeApiError } from '../utils/api'
+import { modelLabel } from '../utils/displayLabels'
 
-use([CanvasRenderer, LineChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, DataZoomComponent])
+use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, DataZoomComponent, MarkAreaComponent, MarkLineComponent])
+
+const DEFAULT_OVERVIEW_DATE = '2022-08-10'
+const HORIZON_COLORS = { 1: '#00ff88', 6: '#00bfff', 24: '#ff6b6b' }
 
 const siteConfig = ref({})
 const mainMetrics = ref([])
-const predictions = ref([])
-const predDays = ref(168)
+const quality = ref({})
+const dispatchMetrics = ref([])
+const modelComparisonRows = ref([])
+const inspectionRows = ref([])
+const selectedDate = ref('')
+const selectedHorizons = ref([1, 6, 24])
+const selectedExperiment = ref('stage5')
+const selectedScenarioMode = ref('all')
+const availableHorizons = ref([1, 6, 24])
+const availableExperiments = ref([{ id: 'stage5', model_name: 'LightGBM', feature_set: 'full_features' }])
+const dateMin = ref('')
+const dateMax = ref('')
 const loading = ref(false)
 const error = ref(null)
 
+const scenarioOptions = [
+  { value: 'all', label: '全部场景' },
+  { value: 'clear', label: '仅晴天' },
+  { value: 'mixed', label: '仅多云' },
+  { value: 'overcast', label: '仅阴天' },
+]
+
 const mainMetric = computed(() => mainMetrics.value.find(row => row.split === 'test') || {})
-const hasOverviewData = computed(() => Boolean(siteConfig.value?.site) || mainMetrics.value.length > 0 || predictions.value.length > 0)
-const predChartOption = computed(() => buildPredictionChartOption(predictions.value))
+const bestTestMetric = computed(() => [...modelComparisonRows.value].filter(row => row.split === 'test').sort((a, b) => Number(a.nrmse_capacity || Infinity) - Number(b.nrmse_capacity || Infinity))[0] || {})
+const hasOverviewData = computed(() => Boolean(siteConfig.value?.site) || mainMetrics.value.length > 0 || inspectionRows.value.length > 0)
+const predChartOption = computed(() => buildInspectionChart(inspectionRows.value, {
+  horizons: selectedHorizons.value,
+  experiment: selectedExperiment.value,
+  scenarioMode: selectedScenarioMode.value,
+}))
+const validTimeCount = computed(() => new Set(inspectionRows.value.map(row => row.valid_time)).size)
+const primaryHorizon = computed(() => selectedHorizons.value[0] || availableHorizons.value[0] || 1)
+const primaryHorizonLabel = computed(() => `t+${primaryHorizon.value}h`)
+const primaryMetrics = computed(() => computeDaytimeMetrics(inspectionRows.value, primaryHorizon.value, selectedExperiment.value))
+const currentDisplayModelName = computed(() => modelLabel(mainMetric.value.model || availableExperiments.value.find(exp => exp.id === selectedExperiment.value)?.model_name || 'LightGBM'))
+const bestTestModelName = computed(() => modelLabel(bestTestMetric.value.model || 'TCN'))
+const featureCount = computed(() => quality.value?.schema?.column_count ?? quality.value?.columns?.total ?? '数据缺失')
+const recordCount = computed(() => quality.value?.rows?.final_cleaned ?? inspectionRows.value.length)
+const rollingMetric = computed(() => dispatchMetrics.value.find(item => item.scenario === 'rolling_optimization') || {})
+const dispatchRevenue = computed(() => formatCurrency(rollingMetric.value.incremental_revenue_eur))
 const overviewInsight = computed(() => {
   const nrmse = metricText(mainMetric.value.nrmse_capacity)
-  const capacity = siteConfig.value?.site?.capacity_kw ? `${siteConfig.value.site.capacity_kw} kW` : '数据缺失'
-  const storage = siteConfig.value?.storage?.capacity_kwh ? `${siteConfig.value.storage.capacity_kwh} kWh` : '数据缺失'
-  const hasCoreData = nrmse !== '数据缺失' && predictions.value.length > 0
   return {
-    title: hasCoreData
-      ? `主模型测试集 nRMSE 为 ${nrmse}，当前已加载 ${predictions.value.length.toLocaleString('zh-CN')} 个预测时间点。`
-      : '系统总览数据尚不完整，请先确认站点配置、模型指标和预测曲线产物。',
-    tone: hasCoreData ? 'positive' : 'warning',
+    title: `当前展示模型为 ${currentDisplayModelName.value}，测试集最优模型为 ${bestTestModelName.value}。两者口径不同：前者服务当前系统展示，后者来自模型评估排行榜。`,
+    tone: 'positive',
     items: [
-      `站点容量：${capacity}；储能容量：${storage}。`,
-      `当前预测窗口：${(predDays.value / 24).toFixed(0)} 天。`,
-      `日间 nRMSE：${metricText(mainMetric.value.daytime_nrmse_capacity)}。`,
+      `当前窗口加载 ${inspectionRows.value.length.toLocaleString('zh-CN')} 条预测曲线记录，${primaryHorizonLabel.value} 日间 MAE/RMSE 为 ${metricText(primaryMetrics.value.mae)} / ${metricText(primaryMetrics.value.rmse)}。`,
+      `当前展示模型测试集 nRMSE：${nrmse}；展示日期窗口：${dateRangeText.value}。`,
+      `调度指标为相对无储能基准的仿真增量收益，单位为欧元，电价来自 OPSD 映射或项目代理场景，仿真周期以调度分析页结果说明为准。`,
     ],
   }
 })
 const locationText = computed(() => {
   const site = siteConfig.value?.site
-  if (!site) return '-'
-  return `${site.latitude}°N, ${Math.abs(site.longitude)}°W`
+  return site ? `${site.latitude}°N, ${Math.abs(site.longitude)}°W` : '-'
 })
-
 const kpiCards = computed(() => [
-  { label: 'PV 容量', value: siteConfig.value?.site?.capacity_kw ? `${siteConfig.value.site.capacity_kw} kW` : '数据缺失', icon: 'Sunny', gradient: 'var(--gradient-orange)' },
-  { label: '主模型 nRMSE', value: metricText(mainMetric.value.nrmse_capacity), icon: 'TrendCharts', gradient: 'var(--gradient-cyan)' },
-  { label: '日间 nRMSE', value: metricText(mainMetric.value.daytime_nrmse_capacity), icon: 'Sunrise', gradient: 'var(--gradient-green)' },
-  { label: '储能容量', value: siteConfig.value?.storage?.capacity_kwh ? `${siteConfig.value.storage.capacity_kwh} kWh` : '数据缺失', icon: 'Coin', gradient: 'var(--gradient-purple)' },
+  { label: '数据记录数量', value: Number.isFinite(Number(recordCount.value)) ? Number(recordCount.value).toLocaleString('zh-CN') : recordCount.value, icon: 'DataLine', gradient: 'var(--gradient-cyan)' },
+  { label: '特征字段数量', value: featureCount.value, icon: 'Document', gradient: 'var(--gradient-green)' },
+  { label: '当前展示模型', value: currentDisplayModelName.value, icon: 'TrendCharts', gradient: 'var(--gradient-orange)' },
+  { label: '测试集最优模型', value: bestTestModelName.value, icon: 'Monitor', gradient: 'var(--gradient-purple)' },
+  { label: '仿真增量收益（欧元）', value: dispatchRevenue.value, icon: 'Coin', gradient: 'var(--gradient-cyan)' },
 ])
-
 const pipelineStages = [
-  { id: 'S1-S3', name: '数据工程' },
-  { id: 'S4-S9', name: '预测建模' },
-  { id: 'S10-S13', name: '调度治理' },
-  { id: 'S14-S15', name: '增强分析' },
-  { id: 'S17-S18', name: '退化与实站' },
+  { name: '数据接入与质量检查' },
+  { name: '特征构建与模型训练' },
+  { name: '功率预测与误差评估' },
+  { name: '储能调度仿真' },
+  { name: '策略收益与运行分析' },
 ]
+const featureEntries = [
+  { path: '/data', label: '数据管理', icon: 'DataLine' },
+  { path: '/models', label: '模型评估', icon: 'TrendCharts' },
+  { path: '/inspect', label: '预测验收', icon: 'Monitor' },
+  { path: '/dispatch', label: '调度分析', icon: 'Setting' },
+]
+const dateRangeText = computed(() => {
+  if (!selectedDate.value) return '-'
+  return `${addDays(selectedDate.value, -1)} ~ ${addDays(selectedDate.value, 1)}`
+})
+const isAtMinDate = computed(() => Boolean(dateMin.value && selectedDate.value <= dateMin.value))
+const isAtMaxDate = computed(() => Boolean(dateMax.value && selectedDate.value >= dateMax.value))
 
+function horizonColor(horizon) { return HORIZON_COLORS[horizon] || '#8a92a6' }
 function metricText(value) {
   const n = Number(value)
   return Number.isFinite(n) ? n.toFixed(4) : '数据缺失'
 }
-
-async function loadPredictions() {
+function formatCurrency(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })} 欧元` : '数据缺失'
+}
+function fmtDate(date) {
+  const d = typeof date === 'string' ? new Date(date) : date
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+function addDays(dateStr, delta) {
+  const d = new Date(dateStr)
+  d.setDate(d.getDate() + delta)
+  return fmtDate(d)
+}
+function clampDate(dateStr) {
+  if (dateMin.value && dateStr < dateMin.value) return dateMin.value
+  if (dateMax.value && dateStr > dateMax.value) return dateMax.value
+  return dateStr
+}
+function disableDate(time) {
+  if (!dateMin.value || !dateMax.value) return false
+  const value = fmtDate(time)
+  return value < dateMin.value || value > dateMax.value
+}
+function goDate(delta) {
+  if (!selectedDate.value) return
+  selectedDate.value = clampDate(addDays(selectedDate.value, delta))
+  loadInspectionData()
+}
+function handleHorizonsChange(value) {
+  if (!value.length && availableHorizons.value.length) selectedHorizons.value = [availableHorizons.value[0]]
+  loadInspectionData()
+}
+function computeDaytimeMetrics(rows, horizon, experiment) {
+  const daytime = rows.filter(row => row.horizon_hours === horizon && row.experiment === experiment && row.solar_elevation_deg != null && Number(row.solar_elevation_deg) > 5)
+  if (!daytime.length) return { mae: null, rmse: null, bias: null }
+  const errors = daytime.map(row => Number(row.error_kw ?? (row.prediction_kw - row.actual_kw))).filter(Number.isFinite)
+  if (!errors.length) return { mae: null, rmse: null, bias: null }
+  const mae = errors.reduce((sum, value) => sum + Math.abs(value), 0) / errors.length
+  const rmse = Math.sqrt(errors.reduce((sum, value) => sum + value * value, 0) / errors.length)
+  const bias = errors.reduce((sum, value) => sum + value, 0) / errors.length
+  return { mae, rmse, bias }
+}
+async function loadMetadata() {
+  const meta = await fetchInspectionMetadata()
+  dateMin.value = meta.date_min || ''
+  dateMax.value = meta.date_max || ''
+  availableHorizons.value = Array.isArray(meta.horizons) && meta.horizons.length ? meta.horizons : [1, 6, 24]
+  availableExperiments.value = Array.isArray(meta.experiments) && meta.experiments.length ? meta.experiments : [{ id: 'stage5', model_name: 'LightGBM', feature_set: 'full_features' }]
+  selectedHorizons.value = selectedHorizons.value.filter(h => new Set(availableHorizons.value).has(h))
+  if (!selectedHorizons.value.length) selectedHorizons.value = availableHorizons.value.slice(0, 3)
+  const experimentIds = new Set(availableExperiments.value.map(exp => exp.id))
+  if (!experimentIds.has(selectedExperiment.value)) selectedExperiment.value = experimentIds.has('stage5') ? 'stage5' : availableExperiments.value[0].id
+  selectedDate.value = clampDate(DEFAULT_OVERVIEW_DATE)
+}
+async function loadInspectionData() {
+  if (!selectedDate.value || !selectedExperiment.value || !selectedHorizons.value.length) return
   try {
-    predictions.value = await fetchMainPredictions(predDays.value)
+    const result = await fetchInspectionData({
+      start: addDays(selectedDate.value, -1),
+      end: addDays(selectedDate.value, 2),
+      horizons: selectedHorizons.value.join(','),
+      experiments: selectedExperiment.value,
+    })
+    inspectionRows.value = result.data || []
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
+    inspectionRows.value = []
   }
 }
-
 async function loadData() {
   loading.value = true
   error.value = null
   try {
-    const bundle = await fetchOverviewBundle()
+    const [bundle, modelData] = await Promise.all([fetchOverviewBundle(), fetchModelComparison(), loadMetadata()])
     siteConfig.value = bundle.siteConfig
     mainMetrics.value = bundle.mainMetrics
-    await loadPredictions()
+    quality.value = bundle.quality
+    dispatchMetrics.value = bundle.dispatchMetrics
+    modelComparisonRows.value = [...(modelData.tabularMetrics || []), ...(modelData.deepLearningMetrics || [])]
+    await loadInspectionData()
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
   } finally {
@@ -165,49 +312,49 @@ onMounted(loadData)
 
 <style scoped>
 .overview { display: flex; flex-direction: column; gap: var(--space-lg); }
+.overview-intro { align-items: center; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.45fr); gap: var(--space-lg); padding: var(--space-xl); }
+.intro-kicker { color: var(--accent-cyan); display: block; font-size: 12px; font-weight: 800; margin-bottom: 8px; }
+.overview-intro h1 { color: var(--text-primary); font-size: 28px; line-height: 1.2; margin-bottom: 10px; }
+.overview-intro p { color: var(--text-secondary); font-size: 14px; line-height: 1.8; }
+.entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.entry-btn { align-items: center; background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-sm); color: var(--text-primary); cursor: pointer; display: flex; gap: 8px; min-height: 44px; padding: 10px 12px; }
+.entry-btn:hover { border-color: var(--border-active); color: var(--accent-cyan); }
 .main-row { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: var(--space-lg); }
-.main-chart { height: 380px; width: 100%; }
+.main-chart { height: 460px; width: 100%; }
+.overview-chart-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; max-width: 780px; }
+.overview-date-nav { width: 32px; padding: 6px; }
+.overview-date-picker { width: 138px; }
+.overview-horizons { display: flex; align-items: center; gap: 6px; }
+.overview-select { width: 150px; }
 .summary-column { display: flex; flex-direction: column; gap: var(--space-md); }
 .summary-card,
 .pipeline-card { padding: var(--space-lg); }
 .summary-card h3,
 .pipeline-card h3 { color: var(--accent-cyan); font-size: 14px; font-weight: 700; margin-bottom: 12px; }
-.detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border-glass);
-}
+.detail-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border-glass); }
 .detail-row span { color: var(--text-secondary); font-size: 12px; }
 .detail-row strong { color: var(--text-primary); font-size: 13px; text-align: right; }
 .detail-row .accent { color: var(--accent-cyan); }
-.status-line {
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12px;
-  margin-bottom: 8px;
-  padding: 8px 10px;
-}
+.status-line { border: 1px solid var(--border-glass); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 12px; margin-bottom: 8px; padding: 8px 10px; }
 .status-line.good { border-color: rgba(0, 245, 160, 0.2); }
 .status-line.muted { color: var(--text-secondary); }
 .pipeline-grid { display: grid; gap: 8px; }
-.pipeline-grid span {
-  color: var(--text-secondary);
-  background: var(--bg-input);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  padding: 7px 9px;
-}
+.pipeline-grid span { color: var(--text-secondary); background: var(--bg-input); border-radius: var(--radius-sm); font-size: 12px; padding: 7px 9px; }
 
 @media (max-width: 1199px) {
+  .overview-intro { grid-template-columns: 1fr; }
   .main-row { grid-template-columns: 1fr; }
   .summary-column { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .overview-chart-actions { justify-content: flex-start; max-width: none; }
 }
 
 @media (max-width: 767px) {
+  .overview-intro { padding: var(--space-lg); }
+  .overview-intro h1 { font-size: 22px; }
+  .entry-grid { grid-template-columns: 1fr; }
   .summary-column { grid-template-columns: 1fr; }
-  .main-chart { height: 320px; }
+  .main-chart { height: 400px; }
+  .overview-date-picker,
+  .overview-select { width: min(100%, 160px); }
 }
 </style>

@@ -65,9 +65,12 @@ defineProps({
 
 .metric-value {
   color: var(--text-primary);
-  font-size: 26px;
+  font-size: 22px;
   line-height: 1.2;
-  overflow-wrap: anywhere;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric-label {

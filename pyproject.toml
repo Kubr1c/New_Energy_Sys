@@ -12,15 +12,27 @@ dependencies = [
   "numpy>=1.26.0",
   "requests>=2.31.0",
   "pyarrow>=15.0.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.29.0",
   "lightgbm>=4.6.0",
   "scikit-learn>=1.4.0",
-  "zarr>=2.17.0,<3.0.0",
-  "numcodecs>=0.12.0",
+  "zarr>=3.1.0",
+  "numcodecs>=0.16.1",
   "s3fs>=2024.0.0",
   "xarray>=2024.0.0",
   "torch>=2.0.0",
   "xgboost>=2.0.0",
-  "catboost>=1.2.0"
+  "catboost>=1.2.0",
+  "SQLAlchemy>=2.0.0",
+  "PyMySQL>=1.1.0",
+  "alembic>=1.13.0",
+  "python-dotenv>=1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "httpx>=0.27.0"
 ]
 
 [project.scripts]
@@ -41,6 +53,10 @@ new-energy-run-stage14-deep-learning = "new_energy_sys.cli.run_stage14_deep_lear
 new-energy-run-stage15-sensitivity = "new_energy_sys.cli.run_stage15_sensitivity:main"
 new-energy-run-stage17-battery-degradation = "new_energy_sys.cli.run_stage17_battery_degradation:main"
 new-energy-run-stage18-rawhide-simulation = "new_energy_sys.cli.run_stage18_rawhide_simulation:main"
+new-energy-run-stage21-rawhide-weather-dispatch = "new_energy_sys.cli.run_stage21_rawhide_weather_dispatch:main"
+new-energy-run-stage22-degradation-aware-config = "new_energy_sys.cli.run_stage22_degradation_aware_config:main"
+new-energy-run-stage22b-economic-sensitivity = "new_energy_sys.cli.run_stage22b_economic_sensitivity:main"
+new-energy-run-stage23-scenario-dispatch-showcase = "new_energy_sys.cli.run_stage23_scenario_dispatch_showcase:main"
 new-energy-prepare-forecast-weather = "new_energy_sys.cli.prepare_forecast_weather:main"
 new-energy-prepare-hrrr-sample = "new_energy_sys.cli.prepare_hrrr_sample:main"
 new-energy-prepare-hrrr-month = "new_energy_sys.cli.prepare_hrrr_month:main"
@@ -52,6 +68,7 @@ new-energy-run-hrrr-point-forecast-batch = "new_energy_sys.cli.run_hrrr_point_fo
 new-energy-merge-hrrr-point-forecast-batches = "new_energy_sys.cli.merge_hrrr_point_forecast_batches:main"
 new-energy-validate-hrrr-probe-contract = "new_energy_sys.cli.validate_hrrr_probe_contract:main"
 new-energy-validate-hrrr-stage7-contract = "new_energy_sys.cli.validate_hrrr_stage7_contract:main"
+new-energy-import-display-data-to-mysql = "new_energy_sys.cli.import_display_data_to_mysql:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
