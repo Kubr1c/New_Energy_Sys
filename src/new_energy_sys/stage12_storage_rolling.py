@@ -46,6 +46,22 @@ class Stage12RollingOptimizationResult:
     report: dict[str, Any]
 
 
+DISPATCH_MODE_LABELS = {
+    "economic": "经济优先调度",
+    "smooth": "平滑运行调度",
+}
+
+
+def _normalize_dispatch_mode(dispatch_mode: str) -> str:
+    """Validate and normalize the public dispatch mode flag."""
+
+    normalized = str(dispatch_mode).strip().lower()
+    if normalized not in DISPATCH_MODE_LABELS:
+        allowed = ", ".join(sorted(DISPATCH_MODE_LABELS))
+        raise ValueError(f"dispatch_mode must be one of: {allowed}.")
+    return normalized
+
+
 def _float_config(config: dict[str, Any], key: str, default: float) -> float:
     """读取可选数值配置。
 
@@ -92,6 +108,63 @@ def _candidate_amounts(limit_kw: float, step_kw: float) -> list[float]:
     values = [float(min(max(value, 0.0), limit_kw)) for value in values]
     values.append(float(limit_kw))
     return sorted({round(value, 10) for value in values})
+
+
+def _signed_storage_power_kw(charge_kw: float, discharge_kw: float) -> float:
+    """Represent charge as positive and discharge as negative for ramp control."""
+
+    return float(charge_kw) - float(discharge_kw)
+
+
+def _smooth_signed_storage_power(
+    *,
+    desired_power_kw: float,
+    previous_power_kw: float,
+    charge_limit_kw: float,
+    discharge_limit_kw: float,
+    ramp_limit_kw: float,
+    action_step_kw: float,
+    action_change_penalty_eur_per_kw: float,
+) -> tuple[float, bool, float]:
+    """Choose a physically valid storage action close to the economic target.
+
+    The economic policy produces a desired signed power.  Smooth mode clips that
+    target by a ramp band around the previous executed action, then snaps the
+    result to a small candidate set such as 0/250/500/750/1000 kW.  If the
+    physical limits and the ramp band do not overlap, the physical limit wins:
+    SOC and PV safety constraints are more important than visual smoothness.
+    """
+
+    if ramp_limit_kw <= 0:
+        raise ValueError("smooth_power_ramp_limit_kw must be positive.")
+    if action_step_kw <= 0:
+        raise ValueError("smooth_action_step_kw must be positive.")
+
+    physical_lower = -float(discharge_limit_kw)
+    physical_upper = float(charge_limit_kw)
+    ramp_lower = float(previous_power_kw) - float(ramp_limit_kw)
+    ramp_upper = float(previous_power_kw) + float(ramp_limit_kw)
+    lower = max(physical_lower, ramp_lower)
+    upper = min(physical_upper, ramp_upper)
+
+    candidates: set[float] = {0.0, physical_lower, physical_upper}
+    candidates.update(_candidate_amounts(physical_upper, action_step_kw))
+    candidates.update(-value for value in _candidate_amounts(-physical_lower, action_step_kw))
+
+    if lower <= upper:
+        candidates = {value for value in candidates if lower - 1e-9 <= value <= upper + 1e-9}
+        candidates.update({lower, upper, float(np.clip(desired_power_kw, lower, upper))})
+    else:
+        candidates.update({float(np.clip(previous_power_kw, physical_lower, physical_upper))})
+
+    def score(value: float) -> tuple[float, float]:
+        target_gap = abs(value - desired_power_kw)
+        change_cost = abs(value - previous_power_kw) * action_change_penalty_eur_per_kw
+        return (target_gap + change_cost, abs(value - previous_power_kw))
+
+    selected = min((float(value) for value in candidates), key=score)
+    ramp_satisfied = abs(selected - previous_power_kw) <= ramp_limit_kw + 1e-9
+    return selected, ramp_satisfied, abs(selected - previous_power_kw)
 
 
 def _nearest_grid_energy(energy_kwh: float, grid: np.ndarray) -> float:
@@ -459,11 +532,17 @@ def _optimize_first_action_fast(
     window: pd.DataFrame,
     *,
     current_soc: float,
+    previous_storage_power_kw: float,
     capacity_kw: float,
     storage_config: dict[str, Any],
     cycle_cost_eur_per_kwh: float,
     shortfall_risk_penalty_eur_per_kwh: float,
     terminal_soc_target: float,
+    dispatch_mode: str,
+    smooth_power_ramp_limit_kw: float,
+    smooth_action_step_kw: float,
+    action_change_penalty_eur_per_kw: float,
+    min_spread_eur_mwh: float | None = None,
 ) -> dict[str, float]:
     """快速滚动 look-ahead 首小时决策。
 
@@ -479,18 +558,32 @@ def _optimize_first_action_fast(
     Args:
         window: 滚动窗口 DataFrame。
         current_soc: 当前 SOC。
+        previous_storage_power_kw: 上一小时实际储能功率，充电为正、放电为负。
         capacity_kw: 站点容量（kW）。
         storage_config: 储能配置字典。
         cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
         shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
         terminal_soc_target: 终端 SOC 目标值。
+        dispatch_mode: economic 保持当前满功率经济策略；smooth 启用功率平滑。
+        smooth_power_ramp_limit_kw: smooth 模式的相邻动作变化上限。
+        smooth_action_step_kw: smooth 模式的动作档位步长。
+        action_change_penalty_eur_per_kw: smooth 模式的动作变化惩罚。
+        min_spread_eur_mwh: 外部指定的最低套利价差 (EUR/MWh)。
+            None 时仅按 cycle_cost + shortfall_penalty 计算内部门槛。
 
     Returns:
         包含 charge_kw、discharge_kw、planned_objective_eur 的字典。
     """
 
     if window.empty:
-        return {"charge_kw": 0.0, "discharge_kw": 0.0, "planned_objective_eur": 0.0}
+        return {
+            "charge_kw": 0.0,
+            "discharge_kw": 0.0,
+            "planned_objective_eur": 0.0,
+            "ramp_constraint_satisfied": True,
+            "storage_power_delta_kw": 0.0,
+            "ramp_limited": False,
+        }
 
     row = window.iloc[0]
     prices = window["price_eur_mwh"].astype(float)
@@ -518,18 +611,23 @@ def _optimize_first_action_fast(
 
     # 单次充放电的往返效率损耗会抬高所需价差；短缺风险惩罚进一步提高放电门槛
     round_trip_efficiency = charge_efficiency * discharge_efficiency
-    min_spread_eur_mwh = (cycle_cost_eur_per_kwh + shortfall_risk_penalty_eur_per_kwh) * 1000.0
-    min_spread_eur_mwh = max(min_spread_eur_mwh, 0.0)
+    _base_min_spread = (cycle_cost_eur_per_kwh + shortfall_risk_penalty_eur_per_kwh) * 1000.0
+    _base_min_spread = max(_base_min_spread, 0.0)
+    effective_min_spread = (
+        max(_base_min_spread, min_spread_eur_mwh)
+        if min_spread_eur_mwh is not None
+        else _base_min_spread
+    )
 
     should_charge = (
         charge_limit_kw > 1e-12
         and price <= low_price
-        and (future_max_price * round_trip_efficiency - price) >= min_spread_eur_mwh
+        and (future_max_price * round_trip_efficiency - price) >= effective_min_spread
     )
     should_discharge = (
         discharge_limit_kw > 1e-12
         and price >= high_price
-        and (price - future_min_price / max(round_trip_efficiency, 1e-12)) >= min_spread_eur_mwh
+        and (price - future_min_price / max(round_trip_efficiency, 1e-12)) >= effective_min_spread
     )
 
     # SOC 目标回归只在非强信号小时触发，避免为了贴目标错过明显高低价套利机会
@@ -541,6 +639,48 @@ def _optimize_first_action_fast(
 
     charge_kw = charge_limit_kw if should_charge and not should_discharge else 0.0
     discharge_kw = discharge_limit_kw if should_discharge and not should_charge else 0.0
+    desired_power_kw = _signed_storage_power_kw(charge_kw, discharge_kw)
+
+    ramp_constraint_satisfied = True
+    storage_power_delta_kw = abs(desired_power_kw - previous_storage_power_kw)
+    ramp_limited = False
+    if dispatch_mode == "smooth":
+        smooth_charge_limit_kw = charge_limit_kw
+        smooth_discharge_limit_kw = discharge_limit_kw
+        if len(window) > 1:
+            next_row = window.iloc[1]
+            next_forecast_pv_kw = _bounded_power(next_row["prediction_kw"], 0.0, capacity_kw * 1.05)
+            next_charge_limit_kw = min(max_charge_kw, next_forecast_pv_kw, available_room_kw)
+            next_discharge_limit_kw = min(
+                max_discharge_kw,
+                max(capacity_kw - next_forecast_pv_kw, 0.0),
+                available_energy_kw,
+            )
+            smooth_charge_limit_kw = min(smooth_charge_limit_kw, next_charge_limit_kw + smooth_power_ramp_limit_kw)
+            smooth_discharge_limit_kw = min(
+                smooth_discharge_limit_kw,
+                next_discharge_limit_kw + smooth_power_ramp_limit_kw,
+            )
+        selected_power_kw, ramp_constraint_satisfied, storage_power_delta_kw = _smooth_signed_storage_power(
+            desired_power_kw=desired_power_kw,
+            previous_power_kw=previous_storage_power_kw,
+            charge_limit_kw=smooth_charge_limit_kw,
+            discharge_limit_kw=smooth_discharge_limit_kw,
+            ramp_limit_kw=smooth_power_ramp_limit_kw,
+            action_step_kw=smooth_action_step_kw,
+            action_change_penalty_eur_per_kw=action_change_penalty_eur_per_kw,
+        )
+        charge_kw = max(selected_power_kw, 0.0)
+        discharge_kw = max(-selected_power_kw, 0.0)
+        if charge_kw > smooth_power_ramp_limit_kw:
+            charge_kw = min(charge_kw, (available_room_kw + smooth_power_ramp_limit_kw) / 2.0)
+        if discharge_kw > smooth_power_ramp_limit_kw:
+            discharge_kw = min(discharge_kw, (available_energy_kw + smooth_power_ramp_limit_kw) / 2.0)
+        selected_power_kw = _signed_storage_power_kw(charge_kw, discharge_kw)
+        storage_power_delta_kw = abs(selected_power_kw - previous_storage_power_kw)
+        ramp_constraint_satisfied = storage_power_delta_kw <= smooth_power_ramp_limit_kw + 1e-9
+        ramp_limited = abs(selected_power_kw - desired_power_kw) > 1e-9
+
     objective = _planned_step_value(
         forecast_pv_kw=forecast_pv_kw,
         price_eur_mwh=price,
@@ -550,7 +690,16 @@ def _optimize_first_action_fast(
         cycle_cost_eur_per_kwh=cycle_cost_eur_per_kwh,
         shortfall_risk_penalty_eur_per_kwh=shortfall_risk_penalty_eur_per_kwh,
     )
-    return {"charge_kw": float(charge_kw), "discharge_kw": float(discharge_kw), "planned_objective_eur": objective}
+    if dispatch_mode == "smooth":
+        objective -= storage_power_delta_kw * action_change_penalty_eur_per_kw
+    return {
+        "charge_kw": float(charge_kw),
+        "discharge_kw": float(discharge_kw),
+        "planned_objective_eur": objective,
+        "ramp_constraint_satisfied": bool(ramp_constraint_satisfied),
+        "storage_power_delta_kw": float(storage_power_delta_kw),
+        "ramp_limited": bool(ramp_limited),
+    }
 
 
 def _simulate_fast_rolling_optimization(
@@ -562,6 +711,11 @@ def _simulate_fast_rolling_optimization(
     cycle_cost_eur_per_kwh: float,
     shortfall_risk_penalty_eur_per_kwh: float,
     terminal_soc_target: float,
+    dispatch_mode: str,
+    smooth_power_ramp_limit_kw: float,
+    smooth_action_step_kw: float,
+    action_change_penalty_eur_per_kw: float,
+    min_spread_eur_mwh: float | None = None,
 ) -> pd.DataFrame:
     """执行快速 24h look-ahead 滚动优化回放。
 
@@ -576,6 +730,11 @@ def _simulate_fast_rolling_optimization(
         cycle_cost_eur_per_kwh: 循环成本（EUR/kWh）。
         shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚（EUR/kWh）。
         terminal_soc_target: 终端 SOC 目标值。
+        dispatch_mode: 调度模式，economic 或 smooth。
+        smooth_power_ramp_limit_kw: smooth 模式的相邻动作变化上限。
+        smooth_action_step_kw: smooth 模式的动作档位步长。
+        action_change_penalty_eur_per_kw: smooth 模式的动作变化惩罚。
+        min_spread_eur_mwh: 外部指定的最低套利价差 (EUR/MWh)，透传给首步决策函数。
 
     Returns:
         小时级快速滚动优化回放明细 DataFrame。
@@ -587,6 +746,7 @@ def _simulate_fast_rolling_optimization(
     soc_min = float(storage_config["soc_min"])
     soc_max = float(storage_config["soc_max"])
     soc = float(storage_config["soc_initial"])
+    previous_storage_power_kw = 0.0
 
     rows: list[dict[str, Any]] = []
     frame = frame.reset_index(drop=True)
@@ -595,11 +755,17 @@ def _simulate_fast_rolling_optimization(
         action = _optimize_first_action_fast(
             window,
             current_soc=soc,
+            previous_storage_power_kw=previous_storage_power_kw,
             capacity_kw=capacity_kw,
             storage_config=storage_config,
             cycle_cost_eur_per_kwh=cycle_cost_eur_per_kwh,
             shortfall_risk_penalty_eur_per_kwh=shortfall_risk_penalty_eur_per_kwh,
             terminal_soc_target=terminal_soc_target,
+            dispatch_mode=dispatch_mode,
+            smooth_power_ramp_limit_kw=smooth_power_ramp_limit_kw,
+            smooth_action_step_kw=smooth_action_step_kw,
+            action_change_penalty_eur_per_kw=action_change_penalty_eur_per_kw,
+            min_spread_eur_mwh=min_spread_eur_mwh,
         )
 
         price = float(row["price_eur_mwh"])
@@ -613,6 +779,53 @@ def _simulate_fast_rolling_optimization(
         available_energy_kw = max((soc_start - soc_min) * capacity_kwh * discharge_efficiency, 0.0)
         actual_charge_kw = min(planned_charge_kw, actual_pv_kw, available_room_kw)
         actual_discharge_kw = min(planned_discharge_kw, available_energy_kw)
+        if dispatch_mode == "smooth":
+            feasible_lower = -available_energy_kw
+            feasible_upper = min(actual_pv_kw, available_room_kw)
+            ramp_lower = previous_storage_power_kw - smooth_power_ramp_limit_kw
+            ramp_upper = previous_storage_power_kw + smooth_power_ramp_limit_kw
+            lower = max(feasible_lower, ramp_lower)
+            upper = min(feasible_upper, ramp_upper)
+            planned_storage_power_kw = _signed_storage_power_kw(planned_charge_kw, planned_discharge_kw)
+            if lower > upper:
+                lower = feasible_lower
+                upper = feasible_upper
+            candidate_values: set[float] = {0.0}
+            candidate_values.update(_candidate_amounts(max(upper, 0.0), smooth_action_step_kw))
+            candidate_values.update(-value for value in _candidate_amounts(max(-lower, 0.0), smooth_action_step_kw))
+            candidate_values = {float(value) for value in candidate_values if lower - 1e-9 <= value <= upper + 1e-9}
+            if not candidate_values:
+                candidate_values = {float(np.clip(planned_storage_power_kw, lower, upper))}
+
+            def keeps_next_hour_feasible(candidate_power_kw: float) -> bool:
+                if index + 1 >= len(frame):
+                    return True
+                candidate_charge_kw = max(candidate_power_kw, 0.0)
+                candidate_discharge_kw = max(-candidate_power_kw, 0.0)
+                next_soc = soc_start + (candidate_charge_kw * charge_efficiency) / capacity_kwh
+                next_soc -= (candidate_discharge_kw / discharge_efficiency) / capacity_kwh
+                next_soc = float(np.clip(next_soc, soc_min, soc_max))
+                next_row = frame.iloc[index + 1]
+                next_actual_pv_kw = _bounded_power(next_row["actual_kw"], 0.0, capacity_kw * 1.05)
+                next_room_kw = max((soc_max - next_soc) * capacity_kwh / charge_efficiency, 0.0)
+                next_energy_kw = max((next_soc - soc_min) * capacity_kwh * discharge_efficiency, 0.0)
+                next_lower = -next_energy_kw
+                next_upper = min(next_actual_pv_kw, next_room_kw)
+                return max(next_lower, candidate_power_kw - smooth_power_ramp_limit_kw) <= min(
+                    next_upper,
+                    candidate_power_kw + smooth_power_ramp_limit_kw,
+                ) + 1e-9
+
+            future_safe_candidates = [value for value in candidate_values if keeps_next_hour_feasible(value)]
+            candidates = future_safe_candidates or list(candidate_values)
+            actual_storage_power_kw = min(
+                candidates,
+                key=lambda value: (abs(value - planned_storage_power_kw), abs(value - previous_storage_power_kw)),
+            )
+            actual_charge_kw = max(actual_storage_power_kw, 0.0)
+            actual_discharge_kw = max(-actual_storage_power_kw, 0.0)
+        actual_storage_power_kw = _signed_storage_power_kw(actual_charge_kw, actual_discharge_kw)
+        actual_storage_power_delta_kw = abs(actual_storage_power_kw - previous_storage_power_kw)
 
         soc = soc_start + (actual_charge_kw * charge_efficiency) / capacity_kwh
         soc -= (actual_discharge_kw / discharge_efficiency) / capacity_kwh
@@ -632,6 +845,10 @@ def _simulate_fast_rolling_optimization(
         rows.append(
             {
                 "scenario": "rolling_optimization",
+                "dispatch_mode": dispatch_mode,
+                "dispatch_mode_label": DISPATCH_MODE_LABELS[dispatch_mode],
+                "power_ramp_limit_kw": float(smooth_power_ramp_limit_kw),
+                "action_step_kw": float(smooth_action_step_kw if dispatch_mode == "smooth" else 0.0),
                 "forecast_timestamp": row["forecast_timestamp"],
                 "dispatch_timestamp": row["dispatch_timestamp"],
                 "target": row["target"],
@@ -645,6 +862,14 @@ def _simulate_fast_rolling_optimization(
                 "planned_discharge_kw": planned_discharge_kw,
                 "actual_charge_kw": actual_charge_kw,
                 "actual_discharge_kw": actual_discharge_kw,
+                "planned_storage_power_kw": _signed_storage_power_kw(planned_charge_kw, planned_discharge_kw),
+                "actual_storage_power_kw": actual_storage_power_kw,
+                "actual_storage_power_delta_kw": actual_storage_power_delta_kw,
+                "ramp_constraint_satisfied": bool(
+                    dispatch_mode != "smooth" or actual_storage_power_delta_kw <= smooth_power_ramp_limit_kw + 1e-9
+                ),
+                "planned_ramp_constraint_satisfied": bool(action["ramp_constraint_satisfied"]),
+                "ramp_limited": bool(action["ramp_limited"]),
                 "planned_net_export_kw": planned_net_export_kw,
                 "actual_net_export_kw": actual_net_export_kw,
                 "no_storage_export_kw": no_storage_export_kw,
@@ -659,6 +884,7 @@ def _simulate_fast_rolling_optimization(
                 "lookahead_available_hours": int(len(window)),
             }
         )
+        previous_storage_power_kw = actual_storage_power_kw
 
     return pd.DataFrame(rows)
 
@@ -687,8 +913,27 @@ def _scenario_metrics(
     total_discharge_kwh = float(scenario_rows["actual_discharge_kw"].sum())
     total_storage_revenue = float(scenario_rows["storage_revenue_eur"].sum())
     total_no_storage_revenue = float(scenario_rows["no_storage_revenue_eur"].sum())
+    dispatch_mode = str(scenario_rows["dispatch_mode"].iloc[0]) if "dispatch_mode" in scenario_rows else ""
+    dispatch_mode_label = (
+        str(scenario_rows["dispatch_mode_label"].iloc[0])
+        if "dispatch_mode_label" in scenario_rows
+        else DISPATCH_MODE_LABELS.get(dispatch_mode, "")
+    )
+    power_ramp_limit_kw = (
+        float(scenario_rows["power_ramp_limit_kw"].iloc[0]) if "power_ramp_limit_kw" in scenario_rows else math.nan
+    )
+    action_step_kw = float(scenario_rows["action_step_kw"].iloc[0]) if "action_step_kw" in scenario_rows else math.nan
+    ramp_deltas = (
+        scenario_rows["actual_storage_power_delta_kw"].astype(float)
+        if "actual_storage_power_delta_kw" in scenario_rows
+        else pd.Series(dtype=float)
+    )
     return {
         "scenario": scenario,
+        "dispatch_mode": dispatch_mode,
+        "dispatch_mode_label": dispatch_mode_label,
+        "power_ramp_limit_kw": power_ramp_limit_kw,
+        "action_step_kw": action_step_kw,
         "sample_count": int(len(scenario_rows)),
         "total_storage_revenue_eur": total_storage_revenue,
         "total_no_storage_revenue_eur": total_no_storage_revenue,
@@ -704,6 +949,10 @@ def _scenario_metrics(
         "min_soc": float(scenario_rows["soc_end"].min()),
         "max_soc": float(scenario_rows["soc_end"].max()),
         "capacity_kw": float(capacity_kw),
+        "max_storage_power_delta_kw": float(ramp_deltas.max()) if len(ramp_deltas) else 0.0,
+        "mean_storage_power_delta_kw": float(ramp_deltas.mean()) if len(ramp_deltas) else 0.0,
+        "ramp_constraint_satisfied": bool(scenario_rows.get("ramp_constraint_satisfied", pd.Series([True])).all()),
+        "ramp_limited_action_count": int(scenario_rows.get("ramp_limited", pd.Series(dtype=bool)).sum()),
         **constraints,
     }
 
@@ -723,6 +972,10 @@ def _no_storage_metrics(reference_rows: pd.DataFrame, *, capacity_kw: float, sto
     revenue = float(reference_rows["no_storage_revenue_eur"].sum())
     return {
         "scenario": "no_storage",
+        "dispatch_mode": "none",
+        "dispatch_mode_label": "无储能",
+        "power_ramp_limit_kw": 0.0,
+        "action_step_kw": 0.0,
         "sample_count": int(len(reference_rows)),
         "total_storage_revenue_eur": revenue,
         "total_no_storage_revenue_eur": revenue,
@@ -738,6 +991,10 @@ def _no_storage_metrics(reference_rows: pd.DataFrame, *, capacity_kw: float, sto
         "min_soc": float(storage_config["soc_initial"]),
         "max_soc": float(storage_config["soc_initial"]),
         "capacity_kw": float(capacity_kw),
+        "max_storage_power_delta_kw": 0.0,
+        "mean_storage_power_delta_kw": 0.0,
+        "ramp_constraint_satisfied": True,
+        "ramp_limited_action_count": 0,
         "soc_within_bounds": True,
         "charge_power_within_limit": True,
         "discharge_power_within_limit": True,
@@ -761,6 +1018,10 @@ def run_stage12_rolling_optimization(
     shortfall_risk_penalty_eur_per_kwh: float | None = None,
     terminal_soc_target: float | None = None,
     terminal_soc_penalty_eur_per_kwh: float | None = None,
+    dispatch_mode: str = "economic",
+    smooth_power_ramp_limit_kw: float | None = None,
+    smooth_action_step_kw: float | None = None,
+    action_change_penalty_eur_per_kw: float | None = None,
     stage11_charge_threshold: float = 24.58,
     stage11_discharge_threshold: float = 35.7025,
     output_paths: dict[str, Path] | None = None,
@@ -782,6 +1043,10 @@ def run_stage12_rolling_optimization(
         shortfall_risk_penalty_eur_per_kwh: 短缺风险惩罚覆盖参数。
         terminal_soc_target: 终端 SOC 目标覆盖参数。
         terminal_soc_penalty_eur_per_kwh: 终端 SOC 惩罚覆盖参数。
+        dispatch_mode: rolling 策略模式，economic 或 smooth。
+        smooth_power_ramp_limit_kw: smooth 模式相邻动作变化上限，默认 250 kW。
+        smooth_action_step_kw: smooth 模式动作档位步长，默认 250 kW。
+        action_change_penalty_eur_per_kw: smooth 模式动作变化惩罚。
         stage11_charge_threshold: Stage11 基准充电阈值，默认 24.58。
         stage11_discharge_threshold: Stage11 基准放电阈值，默认 35.7025。
         output_paths: 输出产物路径字典。
@@ -795,10 +1060,14 @@ def run_stage12_rolling_optimization(
 
     capacity_kw = float(config["site"]["capacity_kw"])
     storage_config = dict(config["storage"])
+    dispatch_mode = _normalize_dispatch_mode(dispatch_mode)
     cycle_cost = _float_config(storage_config, "cycle_cost_eur_per_kwh", 0.002)
     shortfall_penalty = _float_config(storage_config, "shortfall_risk_penalty_eur_per_kwh", 0.001)
     terminal_penalty = _float_config(storage_config, "terminal_soc_penalty_eur_per_kwh", 0.02)
     terminal_target = _float_config(storage_config, "terminal_soc_target", float(storage_config["soc_initial"]))
+    smooth_ramp_limit = _float_config(storage_config, "smooth_power_ramp_limit_kw", 250.0)
+    smooth_step = _float_config(storage_config, "smooth_action_step_kw", 250.0)
+    action_change_penalty = _float_config(storage_config, "action_change_penalty_eur_per_kw", 0.0002)
 
     if cycle_cost_eur_per_kwh is not None:
         cycle_cost = float(cycle_cost_eur_per_kwh)
@@ -808,6 +1077,12 @@ def run_stage12_rolling_optimization(
         terminal_penalty = float(terminal_soc_penalty_eur_per_kwh)
     if terminal_soc_target is not None:
         terminal_target = float(terminal_soc_target)
+    if smooth_power_ramp_limit_kw is not None:
+        smooth_ramp_limit = float(smooth_power_ramp_limit_kw)
+    if smooth_action_step_kw is not None:
+        smooth_step = float(smooth_action_step_kw)
+    if action_change_penalty_eur_per_kw is not None:
+        action_change_penalty = float(action_change_penalty_eur_per_kw)
 
     if lookahead_hours <= 0:
         raise ValueError("lookahead_hours must be positive.")
@@ -815,6 +1090,12 @@ def run_stage12_rolling_optimization(
         raise ValueError("soc_grid_count must be at least 5.")
     if action_step_kw <= 0:
         raise ValueError("action_step_kw must be positive.")
+    if smooth_ramp_limit <= 0:
+        raise ValueError("smooth_power_ramp_limit_kw must be positive.")
+    if smooth_step <= 0:
+        raise ValueError("smooth_action_step_kw must be positive.")
+    if action_change_penalty < 0:
+        raise ValueError("action_change_penalty_eur_per_kw must be non-negative.")
     if not (float(storage_config["soc_min"]) <= terminal_target <= float(storage_config["soc_max"])):
         raise ValueError("terminal_soc_target must stay within storage SOC bounds.")
 
@@ -827,6 +1108,10 @@ def run_stage12_rolling_optimization(
         cycle_cost_eur_per_kwh=cycle_cost,
         shortfall_risk_penalty_eur_per_kwh=shortfall_penalty,
         terminal_soc_target=terminal_target,
+        dispatch_mode=dispatch_mode,
+        smooth_power_ramp_limit_kw=smooth_ramp_limit,
+        smooth_action_step_kw=smooth_step,
+        action_change_penalty_eur_per_kw=action_change_penalty,
     )
 
     fixed = _simulate_dispatch_scenario(
@@ -856,6 +1141,7 @@ def run_stage12_rolling_optimization(
         _no_storage_metrics(rolling, capacity_kw=capacity_kw, storage_config=storage_config),
     ]
     metrics = pd.DataFrame(metric_rows)
+    metric_lookup = metrics.set_index("scenario")
 
     rolling_constraints = _constraint_summary(rolling, storage_config)
     stage11_constraints = _constraint_summary(stage11_best, stage11_config)
@@ -873,11 +1159,11 @@ def run_stage12_rolling_optimization(
             and rolling_constraints["discharge_power_within_limit"]
             and rolling_constraints["no_simultaneous_charge_discharge"]
             and rolling_constraints["energy_balance_error_within_tolerance"]
+            and bool(metric_lookup.loc["rolling_optimization", "ramp_constraint_satisfied"])
         ),
         "stage11_baseline_present": bool(len(stage11_best) == len(rolling)),
     }
 
-    metric_lookup = metrics.set_index("scenario")
     rolling_increment = float(metric_lookup.loc["rolling_optimization", "incremental_revenue_eur"])
     stage11_increment = float(metric_lookup.loc["stage11_best_threshold_q40_q95", "incremental_revenue_eur"])
     if rolling_increment < stage11_increment:
@@ -892,6 +1178,8 @@ def run_stage12_rolling_optimization(
     report = {
         "stage": "stage12_storage_rolling_optimization",
         "strategy": "fast_price_spread_receding_horizon",
+        "dispatch_mode": dispatch_mode,
+        "dispatch_mode_label": DISPATCH_MODE_LABELS[dispatch_mode],
         "horizon_hours": int(horizon_hours),
         "lookahead_hours": int(lookahead_hours),
         "soc_grid_count": int(soc_grid_count),
@@ -903,6 +1191,9 @@ def run_stage12_rolling_optimization(
             "shortfall_risk_penalty_eur_per_kwh": float(shortfall_penalty),
             "terminal_soc_target": float(terminal_target),
             "terminal_soc_penalty_eur_per_kwh": float(terminal_penalty),
+            "smooth_power_ramp_limit_kw": float(smooth_ramp_limit),
+            "smooth_action_step_kw": float(smooth_step),
+            "action_change_penalty_eur_per_kw": float(action_change_penalty),
         },
         "stage11_baseline_thresholds": {
             "charge_price_threshold": float(stage11_charge_threshold),
@@ -964,6 +1255,7 @@ def write_stage12_report(report: dict[str, Any], metrics: pd.DataFrame, path: Pa
         "## 范围",
         "",
         f"- 调度策略: `{report['strategy']}`",
+        f"- 调度模式: `{report['dispatch_mode_label']}`",
         f"- 预测 horizon: `{report['horizon_hours']}h`",
         f"- look-ahead 窗口: `{report['lookahead_hours']}h`",
         f"- 优化器实现: `window_price_spread_with_soc_target`",
@@ -990,6 +1282,9 @@ def write_stage12_report(report: dict[str, Any], metrics: pd.DataFrame, path: Pa
         f"| shortfall_risk_penalty_eur_per_kwh | {objective['shortfall_risk_penalty_eur_per_kwh']:.6f} |",
         f"| terminal_soc_target | {objective['terminal_soc_target']:.4f} |",
         f"| terminal_soc_penalty_eur_per_kwh | {objective['terminal_soc_penalty_eur_per_kwh']:.6f} |",
+        f"| smooth_power_ramp_limit_kw | {objective['smooth_power_ramp_limit_kw']:.4f} |",
+        f"| smooth_action_step_kw | {objective['smooth_action_step_kw']:.4f} |",
+        f"| action_change_penalty_eur_per_kw | {objective['action_change_penalty_eur_per_kw']:.6f} |",
         "",
         "## 场景对比",
         "",

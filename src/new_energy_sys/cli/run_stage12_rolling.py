@@ -93,6 +93,30 @@ def parse_args() -> argparse.Namespace:
         help="可选：终端 SOC 惩罚系数。",
     )
     parser.add_argument(
+        "--dispatch-mode",
+        choices=["economic", "smooth"],
+        default="economic",
+        help="rolling 策略模式：economic 为经济优先，smooth 为平滑运行。",
+    )
+    parser.add_argument(
+        "--smooth-power-ramp-limit-kw",
+        type=float,
+        default=None,
+        help="smooth 模式下相邻小时储能功率变化上限（kW）。",
+    )
+    parser.add_argument(
+        "--smooth-action-step-kw",
+        type=float,
+        default=None,
+        help="smooth 模式下充放电动作档位步长（kW）。",
+    )
+    parser.add_argument(
+        "--action-change-penalty-eur-per-kw",
+        type=float,
+        default=None,
+        help="smooth 模式下动作变化惩罚系数（EUR/kW）。",
+    )
+    parser.add_argument(
         "--stage11-charge-threshold",
         type=float,
         default=24.58,
@@ -150,6 +174,10 @@ def main() -> None:
         shortfall_risk_penalty_eur_per_kwh=args.shortfall_risk_penalty_eur_per_kwh,
         terminal_soc_target=args.terminal_soc_target,
         terminal_soc_penalty_eur_per_kwh=args.terminal_soc_penalty_eur_per_kwh,
+        dispatch_mode=args.dispatch_mode,
+        smooth_power_ramp_limit_kw=args.smooth_power_ramp_limit_kw,
+        smooth_action_step_kw=args.smooth_action_step_kw,
+        action_change_penalty_eur_per_kw=args.action_change_penalty_eur_per_kw,
         stage11_charge_threshold=args.stage11_charge_threshold,
         stage11_discharge_threshold=args.stage11_discharge_threshold,
         output_paths=output_paths,
