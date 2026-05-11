@@ -19,6 +19,7 @@ tmp/
 output/
 Anewthesis/
 更新-上海电力大学本科生毕业设计（论文）工作检查细则等17个文件/
+.pytest_tmp*/
 
 # Raw public datasets can be large and should be reproducible from config.
 data/raw/
@@ -65,3 +66,27 @@ thesis/draft_extracted.txt
 *_accessKeys.csv
 *accessKeys*.csv
 *.pem
+
+# Local-only process scripts retained for traceability but excluded from the
+# current mainline repository surface.
+extract_session_logs.ps1
+start_telegram_channel.ps1
+requirements-hrrr-cloud.txt
+scripts/_*.py
+scripts/aws-hrrr-*
+scripts/audit_hrrr_2021_comprehensive.py
+scripts/build_formatted_thesis_docx.py
+scripts/capture_thesis_*.mjs
+scripts/evaluate_policy_distillation_replay.py
+scripts/format_sonar_thesis.py
+scripts/record_frontend_demo.mjs
+scripts/revise_thesis_copy_*.py
+scripts/run_dqn_dispatch_experiment.py
+scripts/transplant_thesis_into_template_docx.py
+scripts/validate-hrrr-*.ps1
+scripts/visualize_pv_predictions.py
+src/new_energy_sys/conformal_calibration.py
+src/new_energy_sys/cli/run_conformal_calibration.py
+src/new_energy_sys/rl_dqn_dispatch.py
+tests/test_hrrr_*.py
+tests/test_rl_dqn_dispatch.py
