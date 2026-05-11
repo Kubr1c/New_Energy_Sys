@@ -28,8 +28,8 @@
       <section class="overview-intro glass-panel">
         <div>
           <span class="intro-kicker">项目总览</span>
-          <h1>新能源发电预测与储能调度辅助系统</h1>
-          <p>系统面向新能源发电与储能调度场景，集成数据管理、功率预测、模型评估与调度仿真功能，用于辅助分析光伏出力变化并生成储能充放电策略。</p>
+          <h1>储能调度多收益情景量化展示系统</h1>
+          <p>系统面向光伏配储调度场景，集成天气驱动仿真、退化成本评估与多收益情景量化展示，用于辅助分析储能调度在不同经济假设下的净增量收益表现。所有收益均为相对无储能基准的仿真增量，电价来自 OPSD 映射或项目代理场景。</p>
         </div>
         <div class="entry-grid" aria-label="功能入口">
           <button v-for="entry in featureEntries" :key="entry.path" type="button" class="entry-btn" @click="$router.push(entry.path)">
@@ -80,18 +80,20 @@
 
         <div class="summary-column">
           <section class="glass-card summary-card">
-            <h3>站点信息</h3>
-            <div class="detail-row"><span>数据来源</span><strong>新能源发电与气象数据</strong></div>
-            <div class="detail-row"><span>地理位置</span><strong>{{ locationText }}</strong></div>
-            <div class="detail-row"><span>覆盖周期</span><strong>2020-01 ~ 2022-12</strong></div>
+            <h3>预测输入品质</h3>
             <div class="detail-row"><span>当前展示模型</span><strong class="accent">{{ currentDisplayModelName }}</strong></div>
+            <div class="detail-row"><span>测试集最优模型</span><strong>{{ bestTestModelName }}</strong></div>
+            <div class="detail-row"><span>测试集 nRMSE</span><strong>{{ metricText(mainMetric.value.nrmse_capacity) }}</strong></div>
+            <div class="detail-row"><span>数据记录</span><strong>{{ Number.isFinite(Number(recordCount.value)) ? Number(recordCount.value).toLocaleString('zh-CN') : recordCount.value }}</strong></div>
+            <div class="detail-row"><span>特征字段</span><strong>{{ featureCount.value }}</strong></div>
+            <div class="detail-row"><span>地理位置</span><strong>{{ locationText }}</strong></div>
           </section>
 
           <section class="glass-card summary-card">
-            <h3>模型口径说明</h3>
-            <div class="status-line good">当前展示模型：{{ currentDisplayModelName }}</div>
-            <div class="status-line good">测试集最优模型：{{ bestTestModelName }}</div>
-            <div class="status-line muted">首页展示模型用于当前曲线展示和调度联动；模型评估页展示测试集最优结果。</div>
+            <h3>调度数据口径</h3>
+            <div class="status-line good">数据来源：PVDAQ / NSRDB / OPSD / Open-Meteo 公开数据</div>
+            <div class="status-line good">仿真周期：2020-01 ~ 2022-12，小时粒度</div>
+            <div class="status-line muted">所有收益为仿真增量收益。Rawhide 相关为公开容量参数参照场景，不构成真实电站运行或市场结算结果。</div>
           </section>
 
           <section class="glass-card pipeline-card">
@@ -122,6 +124,7 @@ import { buildInspectionChart } from '../charts/inspectionCharts'
 import { fetchInspectionData, fetchInspectionMetadata } from '../services/inspectionService'
 import { fetchOverviewBundle } from '../services/overviewService'
 import { fetchModelComparison } from '../services/modelService'
+import { fetchShowcaseScenarios, fetchShowcaseSummary } from '../services/dispatchService'
 import { normalizeApiError } from '../utils/api'
 import { modelLabel } from '../utils/displayLabels'
 
@@ -144,6 +147,8 @@ const availableHorizons = ref([1, 6, 24])
 const availableExperiments = ref([{ id: 'stage5', model_name: 'LightGBM', feature_set: 'full_features' }])
 const dateMin = ref('')
 const dateMax = ref('')
+const showcaseScenarios = ref([])
+const showcaseReport = ref(null)
 const loading = ref(false)
 const error = ref(null)
 
@@ -173,14 +178,18 @@ const recordCount = computed(() => quality.value?.rows?.final_cleaned ?? inspect
 const rollingMetric = computed(() => dispatchMetrics.value.find(item => item.scenario === 'rolling_optimization') || {})
 const dispatchRevenue = computed(() => formatCurrency(rollingMetric.value.incremental_revenue_eur))
 const overviewInsight = computed(() => {
+  const totalCount = showcaseScenarios.value.length
+  const posCount = positiveScenarioCount.value
+  const bestName = bestScenario.value?.scenario_name || '—'
+  const bestNet = bestScenario.value ? formatCurrency(bestScenario.value.net_incremental_revenue_eur) : '—'
   const nrmse = metricText(mainMetric.value.nrmse_capacity)
   return {
-    title: `当前展示模型为 ${currentDisplayModelName.value}，测试集最优模型为 ${bestTestModelName.value}。两者口径不同：前者服务当前系统展示，后者来自模型评估排行榜。`,
-    tone: 'positive',
+    title: `在 ${totalCount} 个收益情景中，${posCount} 个取得正净增量，最优情景"${bestName}"净增量 ${bestNet}。`,
+    tone: posCount > 0 ? 'positive' : 'warning',
     items: [
-      `当前窗口加载 ${inspectionRows.value.length.toLocaleString('zh-CN')} 条预测曲线记录，${primaryHorizonLabel.value} 日间 MAE/RMSE 为 ${metricText(primaryMetrics.value.mae)} / ${metricText(primaryMetrics.value.rmse)}。`,
-      `当前展示模型测试集 nRMSE：${nrmse}；展示日期窗口：${dateRangeText.value}。`,
-      `调度指标为相对无储能基准的仿真增量收益，单位为欧元，电价来自 OPSD 映射或项目代理场景，仿真周期以调度分析页结果说明为准。`,
+      `预测品质：${currentDisplayModelName.value} 测试集 nRMSE ${nrmse}，作为调度前置环节提供光伏出力估算。`,
+      `调度基准：基准代理电价下纯套利净增量 ${baselineNet.value !== null ? formatCurrency(baselineNet.value) : '数据缺失'}，验证"套利不抵退化"结论。`,
+      `正路径：容量价值叠加、价差放大或电池成本改善条件下可实现正净增量。Rawhide 相关内容为公开容量参数参照场景，不构成实测电站运行数据。`,
     ],
   }
 })
@@ -188,25 +197,33 @@ const locationText = computed(() => {
   const site = siteConfig.value?.site
   return site ? `${site.latitude}°N, ${Math.abs(site.longitude)}°W` : '-'
 })
+const positiveScenarioCount = computed(() => showcaseScenarios.value.filter(s => Number(s.net_incremental_revenue_eur) > 0).length)
+const bestScenario = computed(() => [...showcaseScenarios.value].sort((a, b) => Number(b.net_incremental_revenue_eur) - Number(a.net_incremental_revenue_eur))[0])
+const baselineScenario = computed(() => showcaseScenarios.value.find(s => s.scenario_type === 'baseline'))
+const baselineNet = computed(() => baselineScenario.value ? Number(baselineScenario.value.net_incremental_revenue_eur) : null)
+// Policy distillation accuracy — fixed from task_report_policy_distillation_replay_2026-05-10.md
+const POLICY_DISTILLATION_ACCURACY = 0.9908
+
 const kpiCards = computed(() => [
-  { label: '数据记录数量', value: Number.isFinite(Number(recordCount.value)) ? Number(recordCount.value).toLocaleString('zh-CN') : recordCount.value, icon: 'DataLine', gradient: 'var(--gradient-cyan)' },
-  { label: '特征字段数量', value: featureCount.value, icon: 'Document', gradient: 'var(--gradient-green)' },
-  { label: '当前展示模型', value: currentDisplayModelName.value, icon: 'TrendCharts', gradient: 'var(--gradient-orange)' },
-  { label: '测试集最优模型', value: bestTestModelName.value, icon: 'Monitor', gradient: 'var(--gradient-purple)' },
-  { label: '仿真增量收益（欧元）', value: dispatchRevenue.value, icon: 'Coin', gradient: 'var(--gradient-cyan)' },
+  { label: '最优情景净增量', value: bestScenario.value ? formatCurrency(bestScenario.value.net_incremental_revenue_eur) : '数据缺失', icon: 'Coin', gradient: 'var(--gradient-cyan)' },
+  { label: '正净增量情景数', value: `${positiveScenarioCount.value} / ${showcaseScenarios.value.length}`, icon: 'DataAnalysis', gradient: 'var(--gradient-green)' },
+  { label: '基准纯套利结论', value: baselineNet.value !== null && baselineNet.value < 0 ? '套利不抵退化成本' : '待确认', icon: 'Warning', gradient: 'var(--gradient-orange)' },
+  { label: '策略蒸馏准确率', value: POLICY_DISTILLATION_ACCURACY, icon: 'Select', gradient: 'var(--gradient-purple)' },
+  { label: '预测输入模型', value: currentDisplayModelName.value, icon: 'TrendCharts', gradient: 'var(--gradient-cyan)' },
 ])
 const pipelineStages = [
-  { name: '数据接入与质量检查' },
-  { name: '特征构建与模型训练' },
-  { name: '功率预测与误差评估' },
-  { name: '储能调度仿真' },
-  { name: '策略收益与运行分析' },
+  { name: '公开数据' },
+  { name: '光伏预测' },
+  { name: '滚动调度' },
+  { name: '退化修正' },
+  { name: '多收益情景' },
+  { name: '策略展示' },
 ]
 const featureEntries = [
+  { path: '/dispatch', label: '储能调度', icon: 'Setting' },
   { path: '/data', label: '数据管理', icon: 'DataLine' },
-  { path: '/models', label: '模型评估', icon: 'TrendCharts' },
+  { path: '/models', label: '预测输入', icon: 'TrendCharts' },
   { path: '/inspect', label: '预测验收', icon: 'Monitor' },
-  { path: '/dispatch', label: '调度分析', icon: 'Setting' },
 ]
 const dateRangeText = computed(() => {
   if (!selectedDate.value) return '-'
@@ -293,12 +310,20 @@ async function loadData() {
   loading.value = true
   error.value = null
   try {
-    const [bundle, modelData] = await Promise.all([fetchOverviewBundle(), fetchModelComparison(), loadMetadata()])
+    const [bundle, modelData, scenarios, summary] = await Promise.all([
+      fetchOverviewBundle(),
+      fetchModelComparison(),
+      fetchShowcaseScenarios().catch(() => []),
+      fetchShowcaseSummary().catch(() => null),
+      loadMetadata(),
+    ])
     siteConfig.value = bundle.siteConfig
     mainMetrics.value = bundle.mainMetrics
     quality.value = bundle.quality
     dispatchMetrics.value = bundle.dispatchMetrics
     modelComparisonRows.value = [...(modelData.tabularMetrics || []), ...(modelData.deepLearningMetrics || [])]
+    showcaseScenarios.value = Array.isArray(scenarios) ? scenarios : []
+    showcaseReport.value = summary
     await loadInspectionData()
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)

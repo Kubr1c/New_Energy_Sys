@@ -103,6 +103,16 @@ def get_stage21_dispatch_metrics():
     return _call("get_stage21_dispatch_metrics", data_loader.get_stage21_dispatch_metrics)
 
 
+def get_stage23_scenarios():
+    """Stage23 showcase — fixed file path, no DB fallback."""
+    return data_loader.get_stage23_scenarios()
+
+
+def get_stage23_summary():
+    """Stage23 summary — fixed file path, no DB fallback."""
+    return data_loader.get_stage23_summary()
+
+
 def get_feature_importance(top_n: int = 30):
     return _call("get_feature_importance", data_loader.get_feature_importance, top_n=top_n)
 

@@ -485,6 +485,22 @@ def get_stage21_dispatch_metrics(user: auth.UserInfo = Depends(get_current_user)
     )
 
 
+@app.get("/api/showcase/scenarios")
+def get_showcase_scenarios(user: auth.UserInfo = Depends(get_current_user)):
+    """Stage23 情景化调度展示行 (8 scenarios × 18 columns)."""
+    data = data_loader.get_stage23_scenarios()
+    return data or []
+
+
+@app.get("/api/showcase/summary")
+def get_showcase_summary(user: auth.UserInfo = Depends(get_current_user)):
+    """Stage23 报告摘要 (quality_gates + scenario metadata)."""
+    data = data_loader.get_stage23_summary()
+    if data is None:
+        raise HTTPException(status_code=404, detail="Stage23 showcase report not found")
+    return data
+
+
 @app.get("/api/weather/forecast")
 def get_realtime_weather_forecast(
     latitude: float = weather_experiment.DEFAULT_LATITUDE,

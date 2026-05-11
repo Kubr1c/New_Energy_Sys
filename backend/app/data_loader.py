@@ -235,6 +235,19 @@ def get_stage21_dispatch_metrics() -> list[dict] | None:
     return read_stage21_csv_required(str(_DATA_DIR / "stage21_rawhide_dispatch_metrics.csv"))
 
 
+def get_stage23_scenarios() -> list[dict] | None:
+    """Return Stage23 scenario dispatch showcase rows (8 scenarios × 18 columns)."""
+    path = _DATA_DIR / "stage23_scenario_dispatch_showcase_metrics.csv"
+    if not path.exists():
+        return None
+    return read_csv_cached(str(path))
+
+
+def get_stage23_summary() -> dict | None:
+    """Return Stage23 report JSON (quality_gates + scenario metadata)."""
+    return read_json_cached(str(_DATA_DIR / "stage23_scenario_dispatch_showcase_report.json"))
+
+
 def get_feature_importance(top_n: int = 30) -> list[dict]:
     rows = read_csv_cached(str(_DATA_DIR / "stage4_lightgbm_feature_importance.csv"))
     if not rows:

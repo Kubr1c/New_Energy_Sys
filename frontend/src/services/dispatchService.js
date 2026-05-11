@@ -85,3 +85,13 @@ export async function exportWeatherDispatchExperimentRun(runId, format) {
   })
   return { blob: res.data, headers: res.headers }
 }
+
+export async function fetchShowcaseScenarios() {
+  const res = await api.get('/showcase/scenarios')
+  return Array.isArray(res.data) ? res.data : []
+}
+
+export async function fetchShowcaseSummary() {
+  const res = await api.get('/showcase/summary')
+  return res.data || null
+}

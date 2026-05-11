@@ -14,6 +14,68 @@
       <InsightSummary :title="dispatchInsight.title" :items="dispatchInsight.items" :tone="dispatchInsight.tone" />
 
       <el-tabs v-model="activeTab" class="dispatch-tabs">
+        <el-tab-pane label="调度结论" name="conclusion" lazy>
+          <section v-if="showcaseScenarios.length" class="conclusion-stack">
+            <MetricGrid :items="showcaseKpiCards" min-width="200px" />
+
+            <ChartCard title="净增量收益（按情景）">
+              <v-chart class="showcase-chart" :option="showcaseNetRevenueChartOption" theme="dark-tech" autoresize />
+            </ChartCard>
+
+            <ChartCard title="情景展示表">
+              <el-table :data="showcaseScenarios" size="small" stripe class="showcase-table">
+                <el-table-column prop="scenario_name" label="情景名称" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="scenario_type" label="情景类型" width="130">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.scenario_type === 'baseline' ? 'info' : ''">{{ scenarioTypeLabel(row.scenario_type) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="gross_incremental_revenue_eur" label="毛增量收益" width="120" :formatter="fmtEur" sortable />
+                <el-table-column prop="degradation_cost_eur" label="退化成本" width="120" :formatter="fmtEur" sortable />
+                <el-table-column prop="additional_revenue_eur" label="额外收益" width="110" :formatter="fmtEur" sortable />
+                <el-table-column prop="net_incremental_revenue_eur" label="净增量收益" width="130" sortable>
+                  <template #default="{ row }">
+                    <strong :style="{ color: Number(row.net_incremental_revenue_eur) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }">
+                      {{ fmtCurrency(row.net_incremental_revenue_eur) }}
+                    </strong>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="soh_end" label="SOH 终点" width="100" :formatter="fmtPercent" sortable />
+                <el-table-column prop="equivalent_full_cycles" label="等效满循环" width="110" :formatter="fmtNumber" sortable />
+                <el-table-column prop="boundary_note" label="边界说明" min-width="180" show-overflow-tooltip />
+                <el-table-column type="expand" width="40">
+                  <template #default="{ row }">
+                    <div class="showcase-detail">
+                      <span><strong>配置ID：</strong>{{ row.config_id }}</span>
+                      <span><strong>策略：</strong>{{ row.strategy_label }}</span>
+                      <span><strong>更换成本：</strong>{{ row.replacement_cost_eur_per_kwh }} EUR/kWh</span>
+                      <span><strong>循环寿命倍数：</strong>{{ row.cycle_life_multiplier }}×</span>
+                      <span><strong>年历衰减：</strong>{{ row.calendar_fade_rate }}/年</span>
+                      <span><strong>容量价值：</strong>{{ row.capacity_value_eur_per_kw_year }} EUR/kW·年</span>
+                      <span><strong>约束通过：</strong>{{ row.constraints_passed ? '是' : '否' }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </ChartCard>
+
+            <section class="glass-card quality-card" v-if="showcaseReport?.quality_gates">
+              <h3>质量门禁</h3>
+              <div class="quality-gates">
+                <el-tag :type="showcaseReport.quality_gates.baseline_net_negative ? 'success' : 'danger'">基准净增量为负</el-tag>
+                <el-tag :type="showcaseReport.quality_gates.at_least_one_positive ? 'success' : 'danger'">至少一个正净增量情景</el-tag>
+                <el-tag :type="showcaseReport.quality_gates.all_boundary_notes_non_empty ? 'success' : 'danger'">所有情景有边界说明</el-tag>
+              </div>
+            </section>
+          </section>
+          <PageState
+            v-else
+            type="empty"
+            title="暂无 Stage23 调度展示数据"
+            message="请运行 stage23_scenario_dispatch_showcase 生成展示数据。数据缺失时仍可在天气驱动实验台中进行交互式调度仿真。"
+          />
+        </el-tab-pane>
+
         <el-tab-pane label="天气驱动实验台" name="weather-price" lazy>
           <section v-if="weatherPriceAvailable" class="experiment-stack">
             <div class="experiment-hero glass-panel compact-hero">
@@ -262,7 +324,7 @@
                 <el-table-column label="运行状态" min-width="90"><template #default="{ row }">{{ row.status === 'success' ? '成功' : row.status }}</template></el-table-column>
                 <el-table-column label="操作" min-width="120" fixed="right">
                   <template #default="{ row }">
-                    <el-tooltip :content="row.run_id ? `任务 ID：${row.run_id}` : '该记录缺少任务 ID'" placement="left">
+                    <el-tooltip content="加载该历史方案的调度参数与实验配置" placement="left">
                       <el-button link type="primary" @click="loadExperimentHistoryRun(row.run_id)">恢复该方案</el-button>
                     </el-tooltip>
                   </template>
@@ -273,7 +335,7 @@
           <PageState v-else type="empty" title="暂无天气与电价场景结果" message="未读取到天气驱动与电价场景调度结果。" />
         </el-tab-pane>
 
-        <el-tab-pane label="参考电站收益" name="revenue">
+        <el-tab-pane label="收益与退化" name="revenue-degradation" lazy>
           <section v-if="referenceAvailable" class="tab-stack">
             <div class="reference-hero glass-panel">
               <div>
@@ -291,7 +353,7 @@
 
             <div class="boundary-panel glass-panel">
               <strong>边界说明</strong>
-              <p>仿真结果用于策略对比和系统功能验证，不代表真实结算收益。参考电站参数来自公开容量信息，发电曲线和电价曲线用于方法演示。</p>
+              <p>仿真结果用于策略对比和系统功能验证，不代表实际市场收益。参考电站参数来自公开容量信息，发电曲线和电价曲线用于方法演示。</p>
             </div>
 
             <div class="metric-grid">
@@ -304,27 +366,27 @@
             </ChartCard>
           </section>
           <PageState v-else type="empty" title="暂无参考电站仿真数据" message="未读取到参考电站仿真报告或指标文件。" />
-        </el-tab-pane>
 
-        <el-tab-pane label="电池退化成本评估" name="degradation" lazy>
-          <section class="tab-stack">
-            <div class="metric-grid">
-              <RevenueCard :item="degradationRevenueCard" />
-              <div class="revenue-card glass-card">
-                <span>电池健康状态</span>
-                <strong>{{ formatPercent(degradationRecommended.soh_start) }} -> {{ formatPercent(degradationRecommended.soh_end) }}</strong>
-                <small>仿真周期：{{ simulationPeriodText }}</small>
+          <section class="tab-stack" style="margin-top: var(--space-lg)">
+            <ChartCard title="电池退化成本评估">
+              <div class="metric-grid">
+                <RevenueCard :item="degradationRevenueCard" />
+                <div class="revenue-card glass-card">
+                  <span>电池健康状态</span>
+                  <strong>{{ formatPercent(degradationRecommended.soh_start) }} -> {{ formatPercent(degradationRecommended.soh_end) }}</strong>
+                  <small>仿真周期：{{ simulationPeriodText }}</small>
+                </div>
+                <div class="revenue-card glass-card">
+                  <span>等效满循环</span>
+                  <strong>{{ formatNumber(degradationRecommended.equivalent_full_cycles, 1) }}</strong>
+                  <small>用于估算循环退化成本</small>
+                </div>
               </div>
-              <div class="revenue-card glass-card">
-                <span>等效满循环</span>
-                <strong>{{ formatNumber(degradationRecommended.equivalent_full_cycles, 1) }}</strong>
-                <small>用于估算循环退化成本</small>
-              </div>
-            </div>
+            </ChartCard>
           </section>
         </el-tab-pane>
 
-        <el-tab-pane label="配置优选" name="config" lazy>
+        <el-tab-pane label="配置与策略" name="config-strategy" lazy>
           <section class="tab-stack">
             <ChartCard title="储能配置优选分析">
               <div class="pareto-summary">
@@ -341,35 +403,31 @@
               </el-table>
             </ChartCard>
           </section>
-        </el-tab-pane>
 
-        <el-tab-pane label="策略评价" name="strategy" lazy>
-          <section v-if="scorecard.length" class="tab-stack">
-            <div class="section-title">
-              <span>策略评价</span>
-              <h3>储能调度策略评价对照</h3>
-            </div>
-            <div class="strategy-row">
-              <div v-for="strategy in scorecard" :key="strategy.scenario_id" class="strategy-card glass-card" :class="decisionClass(strategy.governance_decision)">
-                <div class="sc-header">
-                  <span class="sc-decision">{{ decisionLabel(strategy.governance_decision) }}</span>
-                  <span class="sc-score display-number">{{ formatNumber(strategy.governance_score, 1) }}</span>
+          <section v-if="scorecard.length" class="tab-stack" style="margin-top: var(--space-lg)">
+            <ChartCard title="策略评价">
+              <div class="strategy-row">
+                <div v-for="strategy in scorecard" :key="strategy.scenario_id" class="strategy-card glass-card" :class="decisionClass(strategy.governance_decision)">
+                  <div class="sc-header">
+                    <span class="sc-decision">{{ decisionLabel(strategy.governance_decision) }}</span>
+                    <span class="sc-score display-number">{{ formatNumber(strategy.governance_score, 1) }}</span>
+                  </div>
+                  <h4>{{ scenarioLabel(strategy.scenario_id) }}</h4>
+                  <p class="sc-type">{{ strategyTypeLabel(strategy.strategy_type) }}</p>
+                  <div class="sc-metrics">
+                    <div><span>总调度收入</span><strong>{{ formatCurrency(strategy.total_storage_revenue_eur) }}</strong></div>
+                    <div><span>相对无储能基准的增量收益</span><strong :class="Number(strategy.incremental_revenue_eur) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(strategy.incremental_revenue_eur) }}</strong></div>
+                    <div><span>循环次数</span><strong>{{ formatNumber(strategy.cycle_equivalent_count, 1) }}</strong></div>
+                    <div><span>平均 SOC</span><strong>{{ formatPercent(strategy.mean_soc) }}</strong></div>
+                  </div>
+                  <p class="sc-reason">{{ strategy.decision_reason }}</p>
                 </div>
-                <h4>{{ scenarioLabel(strategy.scenario_id) }}</h4>
-                <p class="sc-type">{{ strategyTypeLabel(strategy.strategy_type) }}</p>
-                <div class="sc-metrics">
-                  <div><span>总调度收入</span><strong>{{ formatCurrency(strategy.total_storage_revenue_eur) }}</strong></div>
-                  <div><span>相对无储能基准的增量收益</span><strong :class="Number(strategy.incremental_revenue_eur) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(strategy.incremental_revenue_eur) }}</strong></div>
-                  <div><span>循环次数</span><strong>{{ formatNumber(strategy.cycle_equivalent_count, 1) }}</strong></div>
-                  <div><span>平均 SOC</span><strong>{{ formatPercent(strategy.mean_soc) }}</strong></div>
-                </div>
-                <p class="sc-reason">{{ strategy.decision_reason }}</p>
               </div>
-            </div>
-            <div class="chart-row">
-              <ChartCard title="策略评分对比"><v-chart class="chart" :option="scoreBarOption" theme="dark-tech" autoresize /></ChartCard>
-              <ChartCard title="三维评分雷达"><v-chart class="chart" :option="radarOption" theme="dark-tech" autoresize /></ChartCard>
-            </div>
+              <div class="chart-row">
+                <ChartCard title="策略评分对比"><v-chart class="chart" :option="scoreBarOption" theme="dark-tech" autoresize /></ChartCard>
+                <ChartCard title="三维评分雷达"><v-chart class="chart" :option="radarOption" theme="dark-tech" autoresize /></ChartCard>
+              </div>
+            </ChartCard>
           </section>
           <PageState v-else type="empty" title="暂无策略评价评分" message="当前接口未返回策略评价评分。" />
         </el-tab-pane>
@@ -388,6 +446,7 @@ import { GridComponent, LegendComponent, RadarComponent, TitleComponent, Tooltip
 import VChart from 'vue-echarts'
 import ChartCard from '../components/ChartCard.vue'
 import InsightSummary from '../components/InsightSummary.vue'
+import MetricGrid from '../components/MetricGrid.vue'
 import PageState from '../components/PageState.vue'
 import {
   buildExperimentComparisonOption,
@@ -401,7 +460,7 @@ import {
   buildRawhideRevenueOption,
   buildScoreBarOption,
 } from '../charts/dispatchCharts'
-import { exportWeatherDispatchExperimentRun, fetchGovernanceScorecard, fetchRawhideDegradationMetrics, fetchRawhideDispatchMetrics, fetchRawhideReport, fetchRawhideSensitivityMetrics, fetchStage21DispatchMetrics, fetchStage21DispatchResults, fetchStage21PriceScenarios, fetchStage21Report, fetchStage21WeatherPredictions, fetchWeatherDispatchExperimentRun, fetchWeatherDispatchExperimentRuns, runWeatherDispatchExperiment } from '../services/dispatchService'
+import { exportWeatherDispatchExperimentRun, fetchGovernanceScorecard, fetchRawhideDegradationMetrics, fetchRawhideDispatchMetrics, fetchRawhideReport, fetchRawhideSensitivityMetrics, fetchShowcaseScenarios, fetchShowcaseSummary, fetchStage21DispatchMetrics, fetchStage21DispatchResults, fetchStage21PriceScenarios, fetchStage21Report, fetchStage21WeatherPredictions, fetchWeatherDispatchExperimentRun, fetchWeatherDispatchExperimentRuns, runWeatherDispatchExperiment } from '../services/dispatchService'
 import { normalizeApiError } from '../utils/api'
 import { configLabel, scenarioLabel } from '../utils/displayLabels'
 
@@ -479,7 +538,10 @@ const weatherPredictions = ref([])
 const priceScenarioRows = ref([])
 const dispatchResults = ref([])
 const weatherDispatchMetrics = ref([])
-const activeTab = ref('weather-price')
+// Stage23 showcase
+const showcaseScenarios = ref([])
+const showcaseReport = ref(null)
+const activeTab = ref('conclusion')
 const experimentResultTab = ref('power')
 const loading = ref(false)
 const error = ref(null)
@@ -522,13 +584,53 @@ const priceScenarios = computed(() => {
 const appliedPriceScenarioLabel = computed(() => priceScenarioLabel(appliedExperiment.value.priceScenario))
 const experimentBoundaryText = '本页基于实时天气预测和设定电价场景进行储能调度仿真。光伏出力为模型估算值，收益结果用于策略对比和系统功能验证，不代表真实电站结算收益。'
 const currentStorageSummary = computed(() => `当前配置：${formatKwh(appliedExperiment.value.batteryEnergyKwh)} / ${formatKw(appliedExperiment.value.batteryPowerKw)}，SOC ${formatPercent(appliedExperiment.value.socMin)} - ${formatPercent(appliedExperiment.value.socMax)}。`)
+// Stage23 showcase computed
+const SCENARIO_TYPE_MAP = { baseline: '基准纯套利', price_volatility: '价格波动增强', capacity_revenue: '容量价值叠加', cost_improvement: '退化成本改善', pure_arbitrage_best: '最优纯套利', degradation_aware: '退化约束主动循环', aggressive_baseline: '激进策略对照' }
+const showcaseKpiCards = computed(() => {
+  const positiveCount = showcaseScenarios.value.filter(s => Number(s.net_incremental_revenue_eur) > 0).length
+  const best = [...showcaseScenarios.value].sort((a, b) => Number(b.net_incremental_revenue_eur) - Number(a.net_incremental_revenue_eur))[0]
+  const baseline = showcaseScenarios.value.find(s => s.scenario_type === 'baseline')
+  return [
+    { label: '最优情景净增量', value: best ? fmtCurrency(best.net_incremental_revenue_eur) : '—', icon: 'Coin', gradient: 'var(--gradient-cyan)' },
+    { label: '正净增量数', value: `${positiveCount} / ${showcaseScenarios.value.length}`, icon: 'DataAnalysis', gradient: 'var(--gradient-green)' },
+    { label: '基准纯套利', value: baseline && Number(baseline.net_incremental_revenue_eur) < 0 ? '套利不抵退化' : '—', icon: 'Warning', gradient: 'var(--gradient-orange)' },
+    { label: '情景类型数', value: new Set(showcaseScenarios.value.map(s => s.scenario_type)).size, icon: 'Histogram', gradient: 'var(--gradient-purple)' },
+  ]
+})
+const showcaseNetRevenueChartOption = computed(() => ({
+  tooltip: { trigger: 'axis' },
+  grid: { left: 80, right: 40, top: 20, bottom: 100 },
+  xAxis: { type: 'category', data: showcaseScenarios.value.map(s => s.scenario_name), axisLabel: { rotate: 30, fontSize: 10 } },
+  yAxis: { type: 'value', name: 'EUR' },
+  series: [{
+    type: 'bar', data: showcaseScenarios.value.map(s => ({
+      value: Number(s.net_incremental_revenue_eur),
+      itemStyle: { color: Number(s.net_incremental_revenue_eur) >= 0 ? '#00f5a0' : '#ff6b6b' },
+    })),
+  }],
+}))
+function scenarioTypeLabel(type) { return SCENARIO_TYPE_MAP[type] || type }
+function fmtEur(row, col, value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })
+}
+function fmtCurrency(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })} EUR` : '—'
+}
+function fmtPercent(row, col, value) { const n = Number(value); return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—' }
+function fmtNumber(row, col, value) { const n = Number(value); return Number.isFinite(n) ? n.toFixed(1) : '—' }
+
 const dispatchInsight = computed(() => ({
-  title: `当前调度实验采用${weatherScenarioLabel(appliedExperiment.value.weatherScenario)}预测与${appliedPriceScenarioLabel.value}，优化后相对无储能基准的增量收益为 ${formatCurrency(experimentKpis.value.incrementalRevenueEur)}。`,
-  tone: Number(experimentKpis.value.incrementalRevenueEur || 0) >= 0 ? 'positive' : 'warning',
+  title: showcaseScenarios.value.length
+    ? `调度结论展示 ${showcaseScenarios.value.length} 个收益情景，${showcaseKpiCards.value[1]?.value || '0'} 个取得正净增量。`
+    : `当前调度实验采用${weatherScenarioLabel(appliedExperiment.value.weatherScenario)}预测，优化后相对无储能基准的增量收益为 ${formatCurrency(experimentKpis.value.incrementalRevenueEur)}。`,
+  tone: showcaseScenarios.value.filter(s => Number(s.net_incremental_revenue_eur) > 0).length > 0 ? 'positive' : 'warning',
   items: [
-    '天气预测、光伏估算、储能调度和 KPI 均由后端统一运行接口返回。',
-    `储能参数：${formatKwh(appliedExperiment.value.batteryEnergyKwh)} / ${formatKw(appliedExperiment.value.batteryPowerKw)}，控制区计算单位为 kWh / kW。`,
-    `当前调度窗口：${appliedExperiment.value.horizonHours} 小时；策略评价记录：${scorecard.value.length} 条。`,
+    '所有收益均为相对无储能基准的仿真增量，单位为欧元。Rawhide 相关为公开容量参数参照场景，不构成真实电站运行数据或真实市场结算结果。',
+    '基准代理电价下，单一套利收入难以覆盖电池退化成本；容量价值叠加、价差放大或电池成本改善可实现正净增量。',
+    `当前储能参数：${formatKwh(appliedExperiment.value.batteryEnergyKwh)} / ${formatKw(appliedExperiment.value.batteryPowerKw)}，调度窗口：${appliedExperiment.value.horizonHours} 小时。`,
   ],
 }))
 const revenueCards = computed(() => [
@@ -920,7 +1022,7 @@ function buildLocalExportPayload(format = 'json') {
     boundary: backendExperiment.value?.boundary || {
       is_measured_generation: false,
       is_real_settlement_revenue: false,
-      message: '参考仿真：天气估算 PV 出力与可配置电价场景，不代表实测电站发电或真实结算收益。',
+      message: '参考仿真：天气估算 PV 出力与可配置电价场景，不代表实测电站发电或实际市场收益。',
     },
     parameters: appliedExperiment.value,
     source: backendExperiment.value?.source || null,
@@ -1276,7 +1378,7 @@ async function loadScorecard() {
   loading.value = true
   error.value = null
   try {
-    const [scorecardData, reportData, dispatchData, sensitivityData, degradationData, weatherReportData, weatherData, priceData, resultsData, weatherMetricsData] = await Promise.all([
+    const [scorecardData, reportData, dispatchData, sensitivityData, degradationData, weatherReportData, weatherData, priceData, resultsData, weatherMetricsData, showcaseData, showcaseSummaryData] = await Promise.all([
       optionalRequest(fetchGovernanceScorecard),
       optionalRequest(fetchRawhideReport),
       optionalRequest(fetchRawhideDispatchMetrics),
@@ -1287,6 +1389,8 @@ async function loadScorecard() {
       optionalRequest(fetchStage21PriceScenarios),
       optionalRequest(fetchStage21DispatchResults),
       optionalRequest(fetchStage21DispatchMetrics),
+      optionalRequest(fetchShowcaseScenarios),
+      optionalRequest(fetchShowcaseSummary),
     ])
     scorecard.value = scorecardData || []
     rawhideReport.value = reportData
@@ -1298,6 +1402,8 @@ async function loadScorecard() {
     priceScenarioRows.value = priceData || []
     dispatchResults.value = resultsData || []
     weatherDispatchMetrics.value = weatherMetricsData || []
+    showcaseScenarios.value = Array.isArray(showcaseData) ? showcaseData : []
+    showcaseReport.value = showcaseSummaryData || null
     resetExperiment()
     await loadExperimentRuns()
     await runExperiment()

@@ -61,6 +61,14 @@ const SCENARIO_LABELS = {
   smooth: '平滑运行调度',
   economic: '经济优先调度',
   none: '无储能运行',
+  // Stage23 scenario types
+  baseline: '基准纯套利',
+  price_volatility: '价格波动增强',
+  capacity_revenue: '容量价值叠加',
+  cost_improvement: '退化成本改善',
+  pure_arbitrage_best: '最优纯套利',
+  degradation_aware: '退化约束主动循环',
+  aggressive_baseline: '激进策略对照',
 }
 
 const FEATURE_FIELD_LABELS = {
