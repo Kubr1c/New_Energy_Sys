@@ -19,7 +19,7 @@ html {
 
 body {
   font-family: var(--font-body);
-  background: var(--bg-primary);
+  background: #f4f6f9;
   color: var(--text-primary);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
@@ -52,26 +52,22 @@ a:hover { color: #4de8ff; }
 /* ---- Glass Card ---- */
 .glass-card {
   background: var(--bg-glass);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg);
+  border-radius: 2px;
   box-shadow: var(--shadow-card);
   transition: all var(--duration-normal) var(--ease-default);
 }
 .glass-card:hover {
-  border-color: var(--border-active);
-  box-shadow: var(--shadow-card), var(--shadow-glow-cyan);
-  transform: translateY(-2px);
+  border-color: var(--border-glass);
+  box-shadow: var(--shadow-card);
+  transform: none;
 }
 
 /* ---- Glass Panel (no hover lift) ---- */
 .glass-panel {
   background: var(--bg-glass);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg);
+  border-radius: 2px;
   box-shadow: var(--shadow-card);
 }
 
@@ -142,18 +138,43 @@ a:hover { color: #4de8ff; }
 }
 
 /* ---- Element Plus Dark Overrides ---- */
+.el-button {
+  --el-button-bg-color: #ffffff !important;
+  --el-button-text-color: #606266 !important;
+  --el-button-border-color: #dcdfe6 !important;
+  --el-button-hover-bg-color: #ecf5ff !important;
+  --el-button-hover-text-color: #409eff !important;
+  --el-button-hover-border-color: #409eff !important;
+}
 .el-button--primary {
-  background: var(--gradient-cyan) !important;
-  border-color: transparent !important;
+  --el-button-bg-color: #409eff !important;
+  --el-button-text-color: #ffffff !important;
+  --el-button-border-color: #409eff !important;
+  --el-button-hover-bg-color: #66b1ff !important;
+  --el-button-hover-text-color: #ffffff !important;
+  --el-button-hover-border-color: #66b1ff !important;
 }
 .el-table {
-  --el-table-bg-color: transparent !important;
-  --el-table-tr-bg-color: transparent !important;
-  --el-table-header-bg-color: rgba(255,255,255,0.03) !important;
-  --el-table-row-hover-bg-color: rgba(0, 212, 255, 0.06) !important;
+  --el-table-bg-color: #ffffff !important;
+  --el-table-tr-bg-color: #ffffff !important;
+  --el-table-header-bg-color: #f5f7fa !important;
+  --el-table-striped-bg-color: #fafcff !important;
+  --el-table-row-hover-bg-color: #ecf5ff !important;
   --el-table-border-color: var(--border-glass) !important;
   --el-table-text-color: var(--text-primary) !important;
-  --el-table-header-text-color: rgba(255, 255, 255, 0.82) !important;
+  --el-table-header-text-color: #606266 !important;
+}
+.el-table th.el-table__cell {
+  background: #f5f7fa !important;
+  color: #606266 !important;
+}
+.el-table tr,
+.el-table td.el-table__cell {
+  background: #ffffff !important;
+  color: var(--text-primary) !important;
+}
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: #fafcff !important;
 }
 .el-input__wrapper {
   background: var(--bg-input) !important;
@@ -162,9 +183,37 @@ a:hover { color: #4de8ff; }
 .el-input__inner {
   color: var(--text-primary) !important;
 }
+.el-select__wrapper,
+.el-input-number .el-input__wrapper,
+.el-date-editor.el-input__wrapper {
+  background: #ffffff !important;
+  box-shadow: 0 0 0 1px #dcdfe6 inset !important;
+}
+.el-input-number__decrease,
+.el-input-number__increase {
+  background: #f5f7fa !important;
+  border-color: #dcdfe6 !important;
+  color: #606266 !important;
+}
+.el-radio-button__inner {
+  background: #ffffff !important;
+  border-color: #dcdfe6 !important;
+  color: #606266 !important;
+}
+.el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: #409eff !important;
+  border-color: #409eff !important;
+  color: #ffffff !important;
+  box-shadow: -1px 0 0 0 #409eff !important;
+}
+.el-select__placeholder,
+.el-select__selected-item,
+.el-date-editor .el-input__inner {
+  color: #606266 !important;
+}
 .el-select-dropdown {
-  background: var(--bg-card-solid) !important;
-  border-color: var(--border-glass) !important;
+  background: #ffffff !important;
+  border-color: #dcdfe6 !important;
 }
 .el-tag {
   border-color: var(--border-glass) !important;

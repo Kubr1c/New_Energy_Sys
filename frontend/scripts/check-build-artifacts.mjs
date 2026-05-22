@@ -1,8 +1,12 @@
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const distAssets = join(process.cwd(), 'dist', 'assets')
 const failures = []
+const routerSource = existsSync(join(process.cwd(), 'src', 'router', 'index.js'))
+  ? readFileSync(join(process.cwd(), 'src', 'router', 'index.js'), 'utf8')
+  : ''
+const reportViewerExposed = routerSource.includes('ReportViewer.vue') || routerSource.includes("path: '/reports'")
 
 function assert(condition, message) {
   if (!condition) failures.push(message)
@@ -24,7 +28,9 @@ if (existsSync(distAssets)) {
 
   assert(jsAssets.some(file => file.startsWith('charts-')), 'ECharts/vue-echarts must be emitted as an independent charts chunk')
   assert(jsAssets.some(file => file.startsWith('element-plus-')), 'Element Plus must be emitted as an independent element-plus chunk')
-  assert(jsAssets.some(file => file.startsWith('markdown-')), 'marked/DOMPurify must be emitted as an independent markdown chunk')
+  if (reportViewerExposed) {
+    assert(jsAssets.some(file => file.startsWith('markdown-')), 'marked/DOMPurify must be emitted as an independent markdown chunk')
+  }
   assert(jsAssets.some(file => file.startsWith('vue-vendor-')), 'Vue runtime must be emitted as an independent vue-vendor chunk')
   assert(largestEntryKb > 0, 'main entry chunk was not found')
   assert(largestEntryKb <= 900, `main entry chunk must stay <= 900 KiB, got ${largestEntryKb.toFixed(1)} KiB`)

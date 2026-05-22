@@ -15,15 +15,17 @@
       <el-tabs v-model="activeTab" class="dispatch-tabs">
         <el-tab-pane label="调度结论" name="conclusion" lazy>
           <section v-if="showcaseScenarios.length" class="conclusion-stack">
-            <MetricGrid :items="showcaseKpiCards" min-width="200px" />
+            <MetricGrid :items="showcaseKpiCards" min-width="200px" @item-click="openShowcaseDetail" />
 
-            <ChartCard title="净增量收益（按情景）">
+            <ChartCard title="情景收益对比">
               <v-chart class="showcase-chart" :option="showcaseNetRevenueChartOption" theme="dark-tech" autoresize />
             </ChartCard>
 
             <ChartCard title="情景展示表">
               <el-table :data="showcaseScenarios" size="small" stripe class="showcase-table">
-                <el-table-column prop="scenario_name" label="情景名称" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="scenario_name" label="情景名称" min-width="160" show-overflow-tooltip>
+                  <template #default="{ row }">{{ displayScenarioName(row.scenario_name) }}</template>
+                </el-table-column>
                 <el-table-column prop="scenario_type" label="情景类型" width="130">
                   <template #default="{ row }">
                     <el-tag size="small" :type="row.scenario_type === 'baseline' ? 'info' : 'primary'">{{ scenarioTypeLabel(row.scenario_type) }}</el-tag>
@@ -32,7 +34,7 @@
                 <el-table-column prop="gross_incremental_revenue_eur" label="毛增量收益" width="120" :formatter="fmtEur" sortable />
                 <el-table-column prop="degradation_cost_eur" label="退化成本" width="120" :formatter="fmtEur" sortable />
                 <el-table-column prop="additional_revenue_eur" label="额外收益" width="110" :formatter="fmtEur" sortable />
-                <el-table-column prop="net_incremental_revenue_eur" label="净增量收益" width="130" sortable>
+                <el-table-column prop="net_incremental_revenue_eur" label="相比无储能收益" width="150" sortable>
                   <template #default="{ row }">
                     <strong :style="{ color: Number(row.net_incremental_revenue_eur) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }">
                       {{ fmtCurrency(row.net_incremental_revenue_eur) }}
@@ -41,31 +43,55 @@
                 </el-table-column>
                 <el-table-column prop="soh_end" label="SOH 终点" width="100" :formatter="fmtPercent" sortable />
                 <el-table-column prop="equivalent_full_cycles" label="等效满循环" width="110" :formatter="fmtNumber" sortable />
-                <el-table-column prop="boundary_note" label="边界说明" min-width="180" show-overflow-tooltip />
                 <el-table-column type="expand" width="40">
                   <template #default="{ row }">
                     <div class="showcase-detail">
-                      <span><strong>配置ID：</strong>{{ row.config_id }}</span>
-                      <span><strong>策略：</strong>{{ row.strategy_label }}</span>
-                      <span><strong>更换成本：</strong>{{ row.replacement_cost_eur_per_kwh }} EUR/kWh</span>
+                      <span><strong>调度方式：</strong>{{ strategyDisplayLabel(row.strategy_label) }}</span>
+                      <span><strong>情景解释：</strong>{{ scenarioExplanation(row) }}</span>
+                      <span><strong>更换成本：</strong>{{ formatYuanPerUnitFromEur(row.replacement_cost_eur_per_kwh, 'kWh') }}</span>
                       <span><strong>循环寿命倍数：</strong>{{ row.cycle_life_multiplier }}×</span>
                       <span><strong>年历衰减：</strong>{{ row.calendar_fade_rate }}/年</span>
-                      <span><strong>容量价值：</strong>{{ row.capacity_value_eur_per_kw_year }} EUR/kW·年</span>
+                      <span><strong>容量价值：</strong>{{ formatYuanPerUnitFromEur(row.capacity_value_eur_per_kw_year, 'kW·年') }}</span>
                       <span><strong>约束通过：</strong>{{ row.constraints_passed ? '是' : '否' }}</span>
                     </div>
                   </template>
                 </el-table-column>
               </el-table>
+              <div class="scenario-explain-list">
+                <h4>情景说明</h4>
+                <div v-for="row in showcaseScenarios" :key="row.scenario_name" class="scenario-explain-item">
+                  <strong>{{ displayScenarioName(row.scenario_name) }}</strong>
+                  <p>{{ scenarioExplanation(row) }}</p>
+                  <small>{{ scenarioBoundaryText(row) }}</small>
+                </div>
+              </div>
             </ChartCard>
 
-            <section class="glass-card quality-card" v-if="showcaseReport?.quality_gates">
-              <h3>质量门禁</h3>
-              <div class="quality-gates">
-                <el-tag :type="showcaseReport.quality_gates.baseline_net_negative ? 'success' : 'danger'">基准净增量为负</el-tag>
-                <el-tag :type="showcaseReport.quality_gates.at_least_one_positive ? 'success' : 'danger'">至少一个正净增量情景</el-tag>
-                <el-tag :type="showcaseReport.quality_gates.all_boundary_notes_non_empty ? 'success' : 'danger'">所有情景有边界说明</el-tag>
-              </div>
-            </section>
+            <el-dialog v-model="showcaseDetailVisible" title="调度结论详情" width="920px" class="showcase-dialog">
+              <el-tabs v-model="showcaseDetailTab">
+                <el-tab-pane label="正净增量情景" name="positive">
+                  <el-table :data="positiveShowcaseRows" size="small" stripe max-height="440">
+                    <el-table-column prop="scenario_name" label="情景名称" min-width="170" show-overflow-tooltip>
+                      <template #default="{ row }">{{ displayScenarioName(row.scenario_name) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="typeLabel" label="情景类型" width="130" />
+                    <el-table-column prop="net_incremental_revenue_eur" label="相比无储能收益" width="150" :formatter="fmtEur" sortable />
+                    <el-table-column prop="gross_incremental_revenue_eur" label="毛增量收益" width="130" :formatter="fmtEur" sortable />
+                    <el-table-column prop="degradation_cost_eur" label="退化成本" width="120" :formatter="fmtEur" sortable />
+                    <el-table-column prop="soh_end" label="SOH" width="90" :formatter="fmtPercent" />
+                  </el-table>
+                </el-tab-pane>
+                <el-tab-pane label="情景类型统计" name="types">
+                  <el-table :data="showcaseTypeRows" size="small" stripe max-height="440">
+                    <el-table-column prop="typeLabel" label="情景类型" min-width="150" />
+                    <el-table-column prop="count" label="情景数量" width="100" sortable />
+                    <el-table-column prop="positiveCount" label="正净增量数" width="120" sortable />
+                    <el-table-column prop="bestNetEur" label="最高收益变化" width="150" :formatter="fmtEur" sortable />
+                    <el-table-column prop="averageNetEur" label="平均收益变化" width="150" :formatter="fmtEur" sortable />
+                  </el-table>
+                </el-tab-pane>
+              </el-tabs>
+            </el-dialog>
           </section>
           <PageState
             v-else
@@ -79,14 +105,14 @@
           <section v-if="weatherPriceAvailable" class="experiment-stack">
             <div class="experiment-hero glass-panel compact-hero">
               <div>
-                <span class="kicker">实时天气驱动的储能优化调度实验台</span>
+                <span class="kicker">实时天气预报驱动的储能优化调度实验台</span>
                 <h2>参考电站天气联动调度演示</h2>
                 <p>{{ experimentBoundaryText }}</p>
               </div>
             </div>
 
             <div v-if="experimentRunError" class="experiment-error glass-panel">
-              <strong>实时天气调度失败</strong>
+              <strong>实时天气预报调度失败</strong>
               <p>{{ experimentRunError.message }}</p>
               <small v-if="experimentRunError.suggestedAction">建议：{{ experimentRunError.suggestedAction }}</small>
               <small v-if="experimentRunError.errorCode">错误码：{{ experimentRunError.errorCode }}</small>
@@ -96,16 +122,13 @@
               <div class="control-header">
                 <div class="section-title">
                   <span>调度控制</span>
-                  <h3>参数可调的储能优化调度入口</h3>
+                  <h3>调度控制</h3>
                   <p>{{ currentStorageSummary }}</p>
                 </div>
                 <div class="run-state inline-state" :class="{ running: isRunningExperiment }">
                   <span>运行状态</span>
                   <strong>{{ experimentStatusText }}</strong>
                   <small>{{ lastRunTimeText }}</small>
-                  <el-tooltip placement="top" :content="experimentBoundaryText">
-                    <button class="text-help" type="button">仿真边界</button>
-                  </el-tooltip>
                 </div>
               </div>
               <div class="control-grid">
@@ -183,7 +206,7 @@
               </div>
 
               <div class="action-row">
-                <el-button type="primary" :icon="VideoPlay" :loading="isRunningExperiment" @click="runExperiment">运行调度</el-button>
+                <el-button type="primary" :icon="VideoPlay" :loading="isRunningExperiment" @click="runExperiment">执行调度</el-button>
                 <el-button :icon="Refresh" @click="resetExperiment">恢复默认</el-button>
                 <el-dropdown @command="exportExperimentResult">
                   <el-button :icon="Download">导出结果</el-button>
@@ -200,9 +223,26 @@
 
             <div class="experiment-main">
               <div class="experiment-left">
+                <ChartCard title="调度结果">
+                  <template #actions>
+                    <el-tabs v-model="experimentResultTab" class="mini-tabs">
+                      <el-tab-pane label="功率曲线" name="power" />
+                      <el-tab-pane label="SOC" name="soc" />
+                      <el-tab-pane label="收益对比" name="price" />
+                      <el-tab-pane label="方案对比" name="compare" />
+                    </el-tabs>
+                  </template>
+                  <p class="tab-description">{{ resultTabDescription }}</p>
+                  <v-chart v-if="experimentResultTab === 'power'" class="chart large-chart" :option="powerDispatchOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
+                  <p v-if="experimentResultTab === 'power'" class="chart-caption">储能充电会降低并网功率，放电会提高并网功率。</p>
+                  <v-chart v-else-if="experimentResultTab === 'soc'" class="chart large-chart" :option="socCurveOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
+                  <v-chart v-else-if="experimentResultTab === 'price'" class="chart large-chart" :option="priceRevenueOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
+                  <v-chart v-else class="chart large-chart" :option="comparisonOption" theme="dark-tech" autoresize />
+                </ChartCard>
+
                 <section class="weather-input-grid">
                   <div class="weather-summary glass-card">
-                    <span class="kicker">当前时刻天气概况</span>
+                    <span class="kicker">选中调度时刻天气预报</span>
                     <h3>{{ weatherScenarioLabel(appliedExperiment.weatherScenario) }}</h3>
                     <div class="weather-now-grid">
                       <div><span>温度</span><strong>{{ formatTemperature(selectedMoment.temperatureC) }}</strong></div>
@@ -217,31 +257,14 @@
                   </ChartCard>
                   <ChartCard title="光伏出力预测曲线">
                     <v-chart class="chart input-chart" :option="pvForecastOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
-                    <p class="chart-caption">曲线基于未来 {{ appliedExperiment.horizonHours }}h 天气预测估算，不等同于当前时刻实况辐照度。</p>
                   </ChartCard>
                 </section>
-
-                <ChartCard title="主结果图">
-                  <template #actions>
-                    <el-tabs v-model="experimentResultTab" class="mini-tabs">
-                      <el-tab-pane label="功率调度" name="power" />
-                      <el-tab-pane label="SOC" name="soc" />
-                      <el-tab-pane label="电价收益" name="price" />
-                      <el-tab-pane label="方案对比" name="compare" />
-                    </el-tabs>
-                  </template>
-                  <p class="tab-description">{{ resultTabDescription }}</p>
-                  <v-chart v-if="experimentResultTab === 'power'" class="chart large-chart" :option="powerDispatchOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
-                  <v-chart v-else-if="experimentResultTab === 'soc'" class="chart large-chart" :option="socCurveOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
-                  <v-chart v-else-if="experimentResultTab === 'price'" class="chart large-chart" :option="priceRevenueOption" theme="dark-tech" autoresize @click="handleExperimentChartClick" />
-                  <v-chart v-else class="chart large-chart" :option="comparisonOption" theme="dark-tech" autoresize />
-                </ChartCard>
               </div>
 
               <aside class="kpi-panel glass-panel">
                 <div class="section-title">
-                  <span>KPI 摘要</span>
-                  <h3>运行结果同步刷新</h3>
+                  <span>调度指标</span>
+                  <h3>核心结果</h3>
                 </div>
                 <div class="kpi-section" v-for="group in experimentKpiGroups" :key="group.title">
                   <h4>{{ group.title }}</h4>
@@ -254,7 +277,7 @@
                   </div>
                 </div>
                 <div class="moment-card">
-                  <span>当前联动时刻</span>
+                  <span>选中时刻（电站当地时间）</span>
                   <strong>{{ selectedMoment.timeLabel }}</strong>
                   <p>天气 {{ formatIrradiance(selectedMoment.ghiWm2) }} / {{ formatPercentWhole(selectedMoment.cloudCoverPct) }} 云量，光伏 {{ formatKw(selectedMoment.pvKw) }}，SOC {{ formatPercent(selectedMoment.soc) }}，电价 {{ formatPrice(selectedMoment.priceEurMwh) }}。</p>
                 </div>
@@ -262,13 +285,13 @@
             </div>
 
             <section class="analysis-grid">
-              <ChartCard title="参数灵敏度分析">
+              <ChartCard title="参数影响">
                 <v-chart class="chart" :option="sensitivityOption" theme="dark-tech" autoresize />
               </ChartCard>
               <div class="analysis-panel glass-card">
                 <div class="section-title">
                   <span>方案对比</span>
-                  <h3>调度方案收益与运行质量</h3>
+                  <h3>方案对比</h3>
                 </div>
                 <el-table class="compare-table" :data="experimentComparisonRows" size="small" :row-class-name="comparisonRowClassName">
                   <el-table-column label="方案" min-width="130">
@@ -282,7 +305,7 @@
                     </template>
                   </el-table-column>
                   <el-table-column label="总收益" min-width="110"><template #default="{ row }">{{ formatCurrency(row.totalRevenueEur) }}</template></el-table-column>
-                  <el-table-column label="增量收益" min-width="110"><template #default="{ row }"><span :class="row.incrementalRevenueEur >= 0 ? 'positive' : 'negative'">{{ formatCurrency(row.incrementalRevenueEur) }}</span></template></el-table-column>
+                  <el-table-column label="相比无储能收益" min-width="130"><template #default="{ row }"><span :class="row.incrementalRevenueEur >= 0 ? 'positive' : 'negative'">{{ formatCurrency(row.incrementalRevenueEur) }}</span></template></el-table-column>
                   <el-table-column label="削峰效果" min-width="90">
                     <template #header>
                       <el-tooltip content="削峰效果表示相对无储能基准的并网峰值下降比例。" placement="top">
@@ -300,26 +323,22 @@
                     <template #default="{ row }">{{ formatPercent(row.smoothingRatio) }}</template>
                   </el-table-column>
                 </el-table>
-                <p class="table-note">增量收益为负表示该策略在当前天气与电价场景下未超过无储能基准。</p>
-                <div class="recommendation">
-                  <span>推荐结论</span>
-                  <p>{{ experimentRecommendation }}</p>
-                </div>
+                <p class="table-note">收益为负表示当前参数下没有超过无储能方案。</p>
               </div>
             </section>
 
             <section class="history-panel glass-card">
               <div class="section-title">
                 <span>运行历史</span>
-                <h3>可复盘的实时天气调度记录</h3>
+                <h3>历史记录</h3>
               </div>
               <el-table class="history-table" :data="experimentRunHistoryRows" size="small" v-loading="historyLoading">
-                <el-table-column label="运行时间" min-width="160"><template #default="{ row }">{{ formatDateSecond(row.created_at) }}</template></el-table-column>
+                <el-table-column label="运行时间" min-width="160"><template #default="{ row }">{{ formatRunDateSecond(row.created_at) }}</template></el-table-column>
                 <el-table-column label="天气" min-width="90"><template #default="{ row }">{{ weatherScenarioLabel(row.weather_scenario) }}</template></el-table-column>
                 <el-table-column label="电价" min-width="150"><template #default="{ row }">{{ priceScenarioLabel(row.price_scenario || row.price_scenario_label) }}</template></el-table-column>
                 <el-table-column label="时段" min-width="70"><template #default="{ row }">{{ row.horizon_hours }}h</template></el-table-column>
                 <el-table-column label="参数摘要" min-width="220"><template #default="{ row }">{{ historyParameterSummary(row) }}</template></el-table-column>
-                <el-table-column label="增量收益" min-width="120"><template #default="{ row }"><span :class="Number(row.incremental_revenue_eur || 0) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(row.incremental_revenue_eur) }}</span></template></el-table-column>
+                <el-table-column label="相比无储能收益" min-width="140"><template #default="{ row }"><span :class="Number(row.incremental_revenue_eur || 0) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(row.incremental_revenue_eur) }}</span></template></el-table-column>
                 <el-table-column label="运行状态" min-width="90"><template #default="{ row }">{{ row.status === 'success' ? '成功' : row.status }}</template></el-table-column>
                 <el-table-column label="操作" min-width="120" fixed="right">
                   <template #default="{ row }">
@@ -351,7 +370,7 @@
             </div>
 
             <div class="boundary-panel glass-panel">
-              <strong>边界说明</strong>
+              <strong>说明</strong>
               <p>仿真结果用于策略对比和系统功能验证，不代表实际市场收益。参考电站参数来自公开容量信息，发电曲线和电价曲线用于方法演示。</p>
             </div>
 
@@ -360,7 +379,7 @@
             </div>
 
             <ChartCard title="相对无储能基准的增量收益对比">
-              <p class="chart-note">所有柱状图金额单位为欧元，口径为基于 OPSD 映射或项目代理电价的仿真增量收益；是否扣除退化成本见卡片说明。</p>
+              <p class="chart-note">所有柱状图金额单位为元，口径为基于 OPSD 映射或项目代理电价并按固定汇率换算的仿真增量收益；是否扣除退化成本见卡片说明。</p>
               <v-chart class="chart" :option="referenceRevenueOption" theme="dark-tech" autoresize />
             </ChartCard>
           </section>
@@ -387,9 +406,9 @@
 
         <el-tab-pane label="配置与策略" name="config-strategy" lazy>
           <section class="tab-stack">
-            <ChartCard title="储能配置优选分析">
+            <ChartCard title="储能配置敏感性分析">
               <div class="pareto-summary">
-                <span>推荐配置</span>
+                <span>候选配置</span>
                 <strong>{{ configLabel(bestConfig.config_id, bestConfig) }}</strong>
                 <p>该配置在当前仿真周期下取得 {{ formatCurrency(bestConfig.incremental_revenue_eur) }} 的相对无储能基准增量收益，未单独扣除电池退化成本。</p>
               </div>
@@ -398,7 +417,7 @@
                 <el-table-column label="容量" min-width="90"><template #default="{ row }">{{ formatKwh(row.capacity_kwh) }}</template></el-table-column>
                 <el-table-column label="功率" min-width="90"><template #default="{ row }">{{ formatKw(row.max_discharge_kw) }}</template></el-table-column>
                 <el-table-column label="相对无储能基准的增量收益" min-width="180"><template #default="{ row }"><span class="money" :class="Number(row.incremental_revenue_eur) >= 0 ? 'positive' : 'negative'">{{ formatCurrency(row.incremental_revenue_eur) }}</span></template></el-table-column>
-                <el-table-column label="推荐边界" min-width="90"><template #default="{ row }">{{ isTrue(row.pareto_front) ? '是' : '-' }}</template></el-table-column>
+                <el-table-column label="较优组合" min-width="90"><template #default="{ row }">{{ isTrue(row.pareto_front) ? '是' : '-' }}</template></el-table-column>
               </el-table>
             </ChartCard>
           </section>
@@ -423,8 +442,14 @@
                 </div>
               </div>
               <div class="chart-row">
-                <ChartCard title="策略评分对比"><v-chart class="chart" :option="scoreBarOption" theme="dark-tech" autoresize /></ChartCard>
-                <ChartCard title="三维评分雷达"><v-chart class="chart" :option="radarOption" theme="dark-tech" autoresize /></ChartCard>
+                <ChartCard title="策略评分对比">
+                  <p class="chart-note">经济性、约束满足和风险控制均为评分项，分值越高表示该项评价越好。</p>
+                  <v-chart class="chart" :option="scoreBarOption" theme="dark-tech" autoresize />
+                </ChartCard>
+                <ChartCard title="三维评分雷达">
+                  <p class="chart-note">该雷达图展示策略评分结构，越外表示评分越高；与模型误差雷达图的“越靠近中心越好”方向不同。</p>
+                  <v-chart class="chart" :option="radarOption" theme="dark-tech" autoresize />
+                </ChartCard>
               </div>
             </ChartCard>
           </section>
@@ -458,9 +483,11 @@ import {
   buildRawhideRevenueOption,
   buildScoreBarOption,
 } from '../charts/dispatchCharts'
-import { exportWeatherDispatchExperimentRun, fetchGovernanceScorecard, fetchRawhideDegradationMetrics, fetchRawhideDispatchMetrics, fetchRawhideReport, fetchRawhideSensitivityMetrics, fetchShowcaseScenarios, fetchShowcaseSummary, fetchStage21DispatchMetrics, fetchStage21DispatchResults, fetchStage21PriceScenarios, fetchStage21Report, fetchStage21WeatherPredictions, fetchWeatherDispatchExperimentRun, fetchWeatherDispatchExperimentRuns, runWeatherDispatchExperiment } from '../services/dispatchService'
+import { exportWeatherDispatchExperimentRun, fetchGovernanceScorecard, fetchRawhideDegradationMetrics, fetchRawhideDispatchMetrics, fetchRawhideReport, fetchRawhideSensitivityMetrics, fetchShowcaseScenarios, fetchStage21DispatchMetrics, fetchStage21DispatchResults, fetchStage21PriceScenarios, fetchStage21Report, fetchStage21WeatherPredictions, fetchWeatherDispatchExperimentRun, fetchWeatherDispatchExperimentRuns, runWeatherDispatchExperiment } from '../services/dispatchService'
 import { normalizeApiError } from '../utils/api'
+import { eurToCny, formatYuan, formatYuanFromEur, formatYuanPerMwhFromEur, formatYuanPerUnitFromEur, replaceEurUnitsInText } from '../utils/currency'
 import { configLabel, scenarioLabel } from '../utils/displayLabels'
+import { formatReferenceSiteHour, REFERENCE_SITE_TIME_LABEL } from '../utils/siteTime'
 
 use([CanvasRenderer, BarChart, LineChart, RadarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, RadarComponent])
 
@@ -477,7 +504,7 @@ const RevenueCard = defineComponent({
 })
 
 const weatherScenarioOptions = [
-  { value: 'realtime', label: '实时天气' },
+  { value: 'realtime', label: '实时天气预报' },
   { value: 'clear', label: '晴天' },
   { value: 'cloudy', label: '多云' },
   { value: 'overcast', label: '阴天' },
@@ -513,16 +540,16 @@ function defaultExperimentForm() {
     dispatchDate: new Date().toISOString().slice(0, 10),
     horizonHours: 24,
     weatherScenario: 'realtime',
-    priceScenario: 'solar_duck_curve',
-    batteryEnergyKwh: 2000,
-    batteryPowerKw: 1000,
+    priceScenario: 'high_volatility_stress',
+    batteryEnergyKwh: 4000,
+    batteryPowerKw: 2000,
     chargeEfficiency: 0.95,
     dischargeEfficiency: 0.95,
     initialSoc: 0.5,
     socMin: 0.1,
     socMax: 0.9,
-    objective: 'balanced',
-    algorithm: 'rolling',
+    objective: 'smooth',
+    algorithm: 'rule',
   }
 }
 
@@ -538,9 +565,10 @@ const dispatchResults = ref([])
 const weatherDispatchMetrics = ref([])
 // Stage23 showcase
 const showcaseScenarios = ref([])
-const showcaseReport = ref(null)
-const activeTab = ref('conclusion')
+const activeTab = ref('weather-price')
 const experimentResultTab = ref('power')
+const showcaseDetailVisible = ref(false)
+const showcaseDetailTab = ref('positive')
 const loading = ref(false)
 const error = ref(null)
 const isRunningExperiment = ref(false)
@@ -580,42 +608,96 @@ const priceScenarios = computed(() => {
   return rows.length ? rows : defaultPriceScenarios
 })
 const appliedPriceScenarioLabel = computed(() => priceScenarioLabel(appliedExperiment.value.priceScenario))
-const experimentBoundaryText = '本页基于实时天气预测和设定电价场景进行储能调度仿真。光伏出力为模型估算值，收益结果用于策略对比和系统功能验证，不代表真实电站结算收益。'
+const experimentBoundaryText = '本页基于实时天气预报和设定电价场景进行储能调度仿真。光伏出力为模型估算值，收益结果用于策略对比和系统功能验证，不代表真实电站结算收益。'
 const currentStorageSummary = computed(() => `当前配置：${formatKwh(appliedExperiment.value.batteryEnergyKwh)} / ${formatKw(appliedExperiment.value.batteryPowerKw)}，SOC ${formatPercent(appliedExperiment.value.socMin)} - ${formatPercent(appliedExperiment.value.socMax)}。`)
 // Stage23 showcase computed
 const SCENARIO_TYPE_MAP = { baseline: '基准纯套利', price_volatility: '价格波动增强', capacity_revenue: '容量价值叠加', cost_improvement: '退化成本改善', pure_arbitrage_best: '最优纯套利', degradation_aware: '退化约束主动循环', aggressive_baseline: '激进策略对照' }
 const showcaseKpiCards = computed(() => {
   const positiveCount = showcaseScenarios.value.filter(s => Number(s.net_incremental_revenue_eur) > 0).length
   const best = [...showcaseScenarios.value].sort((a, b) => Number(b.net_incremental_revenue_eur) - Number(a.net_incremental_revenue_eur))[0]
-  const baseline = showcaseScenarios.value.find(s => s.scenario_type === 'baseline')
   return [
     { label: '最优情景净增量', value: best ? fmtCurrency(best.net_incremental_revenue_eur) : '—', icon: 'Coin', gradient: 'var(--gradient-cyan)' },
-    { label: '正净增量数', value: `${positiveCount} / ${showcaseScenarios.value.length}`, icon: 'DataAnalysis', gradient: 'var(--gradient-green)' },
-    { label: '基准纯套利', value: baseline && Number(baseline.net_incremental_revenue_eur) < 0 ? '套利不抵退化' : '—', icon: 'Warning', gradient: 'var(--gradient-orange)' },
-    { label: '情景类型数', value: new Set(showcaseScenarios.value.map(s => s.scenario_type)).size, icon: 'Histogram', gradient: 'var(--gradient-purple)' },
+    { key: 'positive-scenarios', label: '正净增量数', value: `${positiveCount} / ${showcaseScenarios.value.length}`, icon: 'DataAnalysis', gradient: 'var(--gradient-green)', clickable: true, detailTab: 'positive' },
+    { key: 'scenario-types', label: '情景类型数', value: new Set(showcaseScenarios.value.map(s => s.scenario_type)).size, icon: 'Histogram', gradient: 'var(--gradient-purple)', clickable: true, detailTab: 'types' },
   ]
 })
+const positiveShowcaseRows = computed(() => showcaseScenarios.value
+  .filter(row => Number(row.net_incremental_revenue_eur) > 0)
+  .map(row => ({ ...row, typeLabel: scenarioTypeLabel(row.scenario_type) }))
+  .sort((a, b) => Number(b.net_incremental_revenue_eur) - Number(a.net_incremental_revenue_eur)))
+const showcaseTypeRows = computed(() => {
+  const groups = new Map()
+  for (const row of showcaseScenarios.value) {
+    const type = row.scenario_type || 'unknown'
+    const group = groups.get(type) || { scenarioType: type, typeLabel: scenarioTypeLabel(type), count: 0, positiveCount: 0, netValues: [] }
+    const net = Number(row.net_incremental_revenue_eur)
+    group.count += 1
+    if (Number.isFinite(net)) {
+      group.netValues.push(net)
+      if (net > 0) group.positiveCount += 1
+    }
+    groups.set(type, group)
+  }
+  return [...groups.values()]
+    .map(group => ({
+      ...group,
+      bestNetEur: group.netValues.length ? Math.max(...group.netValues) : null,
+      averageNetEur: group.netValues.length ? group.netValues.reduce((sum, value) => sum + value, 0) / group.netValues.length : null,
+    }))
+    .sort((a, b) => b.positiveCount - a.positiveCount || b.count - a.count || a.typeLabel.localeCompare(b.typeLabel, 'zh-CN'))
+})
 const showcaseNetRevenueChartOption = computed(() => ({
-  tooltip: { trigger: 'axis' },
+  tooltip: { trigger: 'axis', valueFormatter: value => formatYuan(value) },
   grid: { left: 80, right: 40, top: 20, bottom: 100 },
-  xAxis: { type: 'category', data: showcaseScenarios.value.map(s => s.scenario_name), axisLabel: { rotate: 30, fontSize: 10 } },
-  yAxis: { type: 'value', name: 'EUR' },
+  xAxis: { type: 'category', data: showcaseScenarios.value.map(s => displayScenarioName(s.scenario_name)), axisLabel: { rotate: 30, fontSize: 10 } },
+  yAxis: { type: 'value', name: '元', axisLabel: { formatter: value => formatYuan(value, 0) } },
   series: [{
     type: 'bar', data: showcaseScenarios.value.map(s => ({
-      value: Number(s.net_incremental_revenue_eur),
+      value: eurToCny(s.net_incremental_revenue_eur),
       itemStyle: { color: Number(s.net_incremental_revenue_eur) >= 0 ? '#00f5a0' : '#ff6b6b' },
     })),
   }],
 }))
 function scenarioTypeLabel(type) { return SCENARIO_TYPE_MAP[type] || type }
+function openShowcaseDetail(item) {
+  if (!item?.detailTab) return
+  showcaseDetailTab.value = item.detailTab
+  showcaseDetailVisible.value = true
+}
 function fmtEur(row, col, value) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '—'
-  return n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })
+  return formatYuanFromEur(value, 2, '—')
 }
 function fmtCurrency(value) {
-  const n = Number(value)
-  return Number.isFinite(n) ? `${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })} EUR` : '—'
+  return formatYuanFromEur(value, 2, '—')
+}
+function displayScenarioName(value) {
+  return replaceEurUnitsInText(value)
+}
+function strategyDisplayLabel(value) {
+  const labels = {
+    zero_cycle_lower_bound: '零循环保护策略',
+    best_active_config: '价差放大下的主动循环策略',
+    best_active_cycling: '容量价值叠加下的主动循环策略',
+    optimal_pure_arbitrage: '纯套利最优筛选策略',
+    degradation_aware_active: '退化约束主动循环策略',
+    stage15_aggressive: '不计退化惩罚的激进对照策略',
+  }
+  return labels[value] || replaceEurUnitsInText(value || '—')
+}
+function scenarioExplanation(row = {}) {
+  const type = row.scenario_type
+  if (type === 'baseline') return '仅采用基准代理电价和默认退化参数，主动循环收益不足以覆盖电池老化，因此作为纯套利基准参照。'
+  if (type === 'price_volatility') return '将代理电价波动放大到 3 倍，用于模拟价差更明显的市场条件，检验储能低价充电、高价放电后能否覆盖退化成本。'
+  if (type === 'capacity_revenue') return `在电价套利之外叠加容量价值，当前情景容量价值为 ${formatYuanPerUnitFromEur(row.capacity_value_eur_per_kw_year, 'kW·年')}，用于说明容量支撑收益对净增量的影响。`
+  if (type === 'cost_improvement') return `假设电池更换成本降低至 ${formatYuanPerUnitFromEur(row.replacement_cost_eur_per_kwh, 'kWh')}，循环寿命提升至 ${row.cycle_life_multiplier || '—'} 倍，年历衰减降至 ${row.calendar_fade_rate || '—'}/年，用于观察电池经济性改善后的收益边界。`
+  if (type === 'pure_arbitrage_best') return '在成本和寿命改善后的纯套利组合中选择表现较优的结果，用于说明单纯套利在更有利电池经济条件下也可能形成正净增量。'
+  if (type === 'degradation_aware') return '在调度目标中加入退化约束，λ=1.0 表示对循环退化进行惩罚，使策略减少无效循环，但在基准代理电价下仍可能无法转正。'
+  if (type === 'aggressive_baseline') return 'λ=0 表示不对退化成本施加惩罚，策略更追求毛收益；该对照用于说明只看毛收益会导致循环过多和净收益恶化。'
+  return '该情景用于比较不同经济假设下的收益变化，结果仅作为参考仿真展示。'
+}
+function scenarioBoundaryText(row = {}) {
+  if (row.boundary_note) return `${row.boundary_note}；该结果为参考仿真，不代表真实电站运行或市场结算。`
+  return '该结果为参考仿真，不代表真实电站运行或市场结算。'
 }
 function fmtPercent(row, col, value) { const n = Number(value); return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—' }
 function fmtNumber(row, col, value) { const n = Number(value); return Number.isFinite(n) ? n.toFixed(1) : '—' }
@@ -626,8 +708,8 @@ const dispatchInsight = computed(() => ({
     : `当前调度实验采用${weatherScenarioLabel(appliedExperiment.value.weatherScenario)}预测，优化后相对无储能基准的增量收益为 ${formatCurrency(experimentKpis.value.incrementalRevenueEur)}。`,
   tone: showcaseScenarios.value.filter(s => Number(s.net_incremental_revenue_eur) > 0).length > 0 ? 'positive' : 'warning',
   items: [
-    '所有收益均为相对无储能基准的仿真增量，单位为欧元。Rawhide 相关为公开容量参数参照场景，不构成真实电站运行数据或真实市场结算结果。',
-    '基准代理电价下，单一套利收入难以覆盖电池退化成本；容量价值叠加、价差放大或电池成本改善可实现正净增量。',
+    '所有收益均为相对无储能基准的仿真增量，单位为元。Rawhide 相关为公开容量参数参照场景，不构成真实电站运行数据或真实市场结算结果。',
+    '容量价值叠加、价差放大或电池成本改善等情景用于比较不同经济假设下的收益变化。',
     `当前储能参数：${formatKwh(appliedExperiment.value.batteryEnergyKwh)} / ${formatKw(appliedExperiment.value.batteryPowerKw)}，调度窗口：${appliedExperiment.value.horizonHours} 小时。`,
   ],
 }))
@@ -655,7 +737,7 @@ const experimentComparisonRows = computed(() => {
     return {
       ...row,
       recommended,
-      conclusion: row.label === '无储能' ? '基准方案' : recommended ? '推荐方案' : row.incrementalRevenueEur < 0 ? '不推荐' : '可对照',
+      conclusion: row.label === '无储能' ? '基准方案' : recommended ? '当前较优' : row.incrementalRevenueEur < 0 ? '待谨慎' : '可对照',
     }
   })
 })
@@ -666,37 +748,21 @@ const experimentStatusText = computed(() => {
   if (backendExperiment.value) return '任务已完成'
   return '待运行'
 })
-const lastRunTimeText = computed(() => backendExperiment.value?.created_at ? `最近运行 ${formatDateSecond(backendExperiment.value.created_at)}` : '尚未运行调度任务')
+const lastRunTimeText = computed(() => backendExperiment.value?.created_at ? `最近运行 ${formatRunDateSecond(backendExperiment.value.created_at)}` : '尚未运行调度任务')
 const resultTabDescription = computed(() => ({
-  power: '展示光伏预测、储能充放电与并网功率之间的运行关系。',
+  power: '展示储能调度如何改变并网功率；上下图共享时间轴，但分别采用电站侧出力尺度和储能设备净功率尺度。',
   soc: '展示储能荷电状态是否在 SOC 上下限范围内运行。',
   price: '展示电价、小时收益和储能调度带来的收益贡献。',
   compare: '展示各策略相对无储能基准的增量收益，便于比较策略优劣。',
 })[experimentResultTab.value] || '')
 const experimentKpiGroups = computed(() => [
   {
-    title: '经济性',
+    title: '核心指标',
     items: [
-      kpiCard('增量收益', formatCurrency(experimentKpis.value.incrementalRevenueEur), experimentKpis.value.incrementalRevenueEur, '相对无储能基准'),
+      kpiCard('相比无储能收益', formatCurrency(experimentKpis.value.incrementalRevenueEur), experimentKpis.value.incrementalRevenueEur, '当前参数结果'),
       kpiCard('总收益', formatCurrency(experimentKpis.value.totalRevenueEur), experimentKpis.value.totalRevenueEur - experimentKpis.value.noStorageRevenueEur, '较无储能收益'),
-      kpiCard('退化成本', formatCurrency(experimentKpis.value.degradationCostEur), -experimentKpis.value.degradationCostEur, '按吞吐量估算'),
-    ],
-  },
-  {
-    title: '运行效果',
-    items: [
       kpiCard('弃光率', formatPercent(experimentKpis.value.curtailmentRate), -experimentKpis.value.curtailmentRate, '越低越好'),
-      kpiCard('弃光减少率', formatPercent(experimentKpis.value.curtailmentReductionRatio), experimentKpis.value.curtailmentReductionRatio, '相对无储能'),
-      kpiCard('削峰效果', formatPercent(experimentKpis.value.peakShavingRatio), experimentKpis.value.peakShavingRatio, '并网峰值下降'),
-      kpiCard('平滑效果', formatPercent(experimentKpis.value.smoothingRatio), experimentKpis.value.smoothingRatio, '爬坡波动下降'),
-    ],
-  },
-  {
-    title: '电池健康',
-    compact: true,
-    items: [
-      kpiCard('等效循环次数', formatNumber(experimentKpis.value.equivalentCycles, 2), -experimentKpis.value.equivalentCycles, '本窗口估算'),
-      kpiCard('SOH影响', `-${formatPercent(experimentKpis.value.sohImpact)}`, -experimentKpis.value.sohImpact, '窗口内退化估计'),
+      kpiCard('SOH变化', formatSohImpact(experimentKpis.value.sohImpact), -experimentKpis.value.sohImpact, '窗口内退化估计'),
     ],
   },
 ])
@@ -708,7 +774,6 @@ const socCurveOption = computed(() => buildExperimentSocOption(experimentSeriesR
 const priceRevenueOption = computed(() => buildExperimentPriceRevenueOption(experimentSeriesRows.value, selectedTimeIndex.value))
 const comparisonOption = computed(() => buildExperimentComparisonOption(experimentComparisonRows.value))
 const sensitivityOption = computed(() => buildExperimentSensitivityOption(sensitivityRows.value))
-const experimentRecommendation = computed(() => backendExperiment.value?.recommendation || '请运行调度获取推荐结论。')
 
 function revenueCard(label, value, degradationDeducted, scenario, row = {}) {
   return {
@@ -721,17 +786,18 @@ function revenueCard(label, value, degradationDeducted, scenario, row = {}) {
       `仿真周期：${simulationPeriodText.value}`,
       `退化成本：${degradationDeducted ? '已扣除' : '未扣除'}`,
       `储能配置：${configLabel(row.config_id, row) || storageConfigText.value}`,
-      '收益单位：欧元（基于 OPSD 映射或项目代理电价）',
+      '收益单位：元（基于 OPSD 映射或项目代理电价并按固定汇率换算）',
     ],
   }
 }
 
 function mapBackendDispatchRows(rows) {
   return rows.map(row => {
-    const time = row.time || row.forecast_valid_time
+    const sourceTime = row.source_forecast_valid_time || row.forecast_valid_time || row.time
+    const time = sourceTime || row.time
     return {
       time,
-      sourceTime: row.source_forecast_valid_time || row.forecast_valid_time,
+      sourceTime,
       timeLabel: formatDateHour(time),
       ghiWm2: numberOr(row.ghi_wm2, 0),
       pvKw: numberOr(row.pv_kw, 0),
@@ -796,12 +862,11 @@ function buildExperimentRows(form) {
       .map(row => [String(row.timestamp), numberOr(row.price_eur_mwh, 0)]),
   )
   const horizon = Math.min(Math.max(Number(form.horizonHours) || 24, 1), 72)
-  const startDate = parseDispatchDate(form.dispatchDate)
   const capacityKw = numberOr(referenceSite.value.pv_capacity_kw_ac, 22000)
   return Array.from({ length: horizon }, (_, index) => {
     const source = sourceRows[index % sourceRows.length]
     const sourceTime = source.weather_valid_time || source.timestamp
-    const time = startDate ? new Date(startDate.getTime() + index * 3600000).toISOString() : sourceTime
+    const time = sourceTime
     const baseGhi = numberOr(source.ghi_wm2, 0)
     const ghiWm2 = clamp(baseGhi * profile.ghi, 0, 1100)
     const pvKw = clamp(capacityKw * ghiWm2 / 1000 * numberOr(source.performance_ratio, 0.82), 0, capacityKw)
@@ -977,7 +1042,7 @@ async function runExperiment() {
     appliedExperiment.value = next
     selectedTimeIndex.value = 0
     experimentRunId.value += 1
-    await loadExperimentRuns()
+    void loadExperimentRuns()
   } catch (e) {
     const normalized = e.normalized || normalizeApiError(e)
     experimentRunError.value = normalized
@@ -1025,7 +1090,6 @@ function buildLocalExportPayload(format = 'json') {
     parameters: appliedExperiment.value,
     source: backendExperiment.value?.source || null,
     kpis: experimentKpis.value,
-    recommendation: experimentRecommendation.value,
   }
   if (format === 'summary') {
     return {
@@ -1079,10 +1143,7 @@ async function loadExperimentRuns() {
   historyLoading.value = true
   try {
     const summaries = await fetchWeatherDispatchExperimentRuns(20)
-    const details = await Promise.all(summaries.map(row => row.run_id
-      ? fetchWeatherDispatchExperimentRun(row.run_id).catch(() => null)
-      : Promise.resolve(null)))
-    experimentRunHistory.value = summaries.map((row, index) => mergeHistoryDetail(row, details[index]))
+    experimentRunHistory.value = summaries.map(row => mergeHistoryDetail(row, null))
   } catch {
     experimentRunHistory.value = []
   } finally {
@@ -1182,12 +1243,17 @@ function kpiCard(label, value, rawDelta, hint) {
   return {
     label,
     value,
-    delta: `${positive ? '+' : ''}${formatNumber(rawDelta, 2)} | ${hint}`,
+    delta: hint,
     tone: positive ? 'positive-card' : 'warning-card',
   }
 }
+function formatSohImpact(value) {
+  const n = Math.abs(Number(value))
+  if (!Number.isFinite(n)) return 'N/A'
+  return n > 0 && n * 100 < 0.01 ? '<0.01%' : formatPercent(n)
+}
 function decisionLabel(decision) {
-  const labels = { reject: '不推荐', pilot_candidate: '可试点', baseline: '基准方案', analysis_upper_bound: '分析上界' }
+  const labels = { reject: '不宜采用', pilot_candidate: '可试点', baseline: '基准方案', analysis_upper_bound: '分析上界' }
   return labels[decision] || decision || '-'
 }
 function strategyTypeLabel(value) {
@@ -1302,11 +1368,6 @@ function emptyKpis() {
     smoothingRatio: 0,
   }
 }
-function parseDispatchDate(value) {
-  if (!value) return null
-  const date = new Date(`${value}T00:00:00Z`)
-  return Number.isNaN(date.getTime()) ? null : date
-}
 function firstWeatherDate() {
   const source = weatherPredictions.value[0]?.weather_valid_time || weatherPredictions.value[0]?.timestamp
   if (!source) return ''
@@ -1314,11 +1375,9 @@ function firstWeatherDate() {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10)
 }
 function formatDateHour(value) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value || '-')
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit' })
+  return formatReferenceSiteHour(value)
 }
-function formatDateSecond(value) {
+function formatRunDateSecond(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return String(value || '-')
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -1328,8 +1387,7 @@ function formatNumber(value, digits = 2) {
   return n === null ? 'N/A' : n.toLocaleString('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits })
 }
 function formatCurrency(value) {
-  const n = toNumber(value)
-  return n === null ? 'N/A' : `${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })} 欧元`
+  return formatYuanFromEur(value, 2, 'N/A')
 }
 function formatPercent(value) {
   const n = toNumber(value)
@@ -1352,8 +1410,7 @@ function formatWind(value) {
   return n === null ? 'N/A' : `${n.toFixed(1)} m/s`
 }
 function formatPrice(value) {
-  const n = toNumber(value)
-  return n === null ? 'N/A' : `${n.toFixed(1)} 欧元/MWh`
+  return formatYuanPerMwhFromEur(value, 1, 'N/A')
 }
 function formatKw(value) {
   const n = toNumber(value)
@@ -1376,7 +1433,7 @@ async function loadScorecard() {
   loading.value = true
   error.value = null
   try {
-    const [scorecardData, reportData, dispatchData, sensitivityData, degradationData, weatherReportData, weatherData, priceData, resultsData, weatherMetricsData, showcaseData, showcaseSummaryData] = await Promise.all([
+    const [scorecardData, reportData, dispatchData, sensitivityData, degradationData, weatherReportData, weatherData, priceData, resultsData, weatherMetricsData, showcaseData] = await Promise.all([
       optionalRequest(fetchGovernanceScorecard),
       optionalRequest(fetchRawhideReport),
       optionalRequest(fetchRawhideDispatchMetrics),
@@ -1388,7 +1445,6 @@ async function loadScorecard() {
       optionalRequest(fetchStage21DispatchResults),
       optionalRequest(fetchStage21DispatchMetrics),
       optionalRequest(fetchShowcaseScenarios),
-      optionalRequest(fetchShowcaseSummary),
     ])
     scorecard.value = scorecardData || []
     rawhideReport.value = reportData
@@ -1401,9 +1457,8 @@ async function loadScorecard() {
     dispatchResults.value = resultsData || []
     weatherDispatchMetrics.value = weatherMetricsData || []
     showcaseScenarios.value = Array.isArray(showcaseData) ? showcaseData : []
-    showcaseReport.value = showcaseSummaryData || null
     resetExperiment()
-    await loadExperimentRuns()
+    void loadExperimentRuns()
     await runExperiment()
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
@@ -1420,6 +1475,23 @@ onBeforeUnmount(() => {
 <style scoped>
 .dispatch { display: flex; flex-direction: column; gap: var(--space-lg); }
 .dispatch-tabs { min-width: 0; }
+.dispatch :deep(.dispatch-tabs > .el-tabs__header) { display: none; }
+.dispatch-tabs :deep(.el-tabs__nav) { display: flex; }
+.dispatch-tabs :deep(.el-tabs__item[aria-controls="pane-weather-price"]) { order: -4; }
+.dispatch-tabs :deep(.el-tabs__item[aria-controls="pane-conclusion"]) { order: -3; }
+.dispatch :deep(.chart-header),
+.dispatch :deep(.section-header) {
+  border-bottom: 1px solid #ebeef5;
+  margin: 0;
+  min-height: 58px;
+  padding: 0 20px;
+}
+.dispatch :deep(.chart-header h3),
+.dispatch :deep(.section-header h3) {
+  color: #303133;
+  font-size: 15px;
+  font-weight: 600;
+}
 .tab-stack,
 .experiment-stack { display: flex; flex-direction: column; gap: var(--space-lg); }
 :deep(.el-tabs__nav-wrap::after) { background: var(--border-glass); }
@@ -1431,7 +1503,8 @@ onBeforeUnmount(() => {
 :deep(.el-date-editor.el-input) { width: 100%; }
 .reference-hero,
 .experiment-hero { align-items: center; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 0.6fr); gap: var(--space-lg); padding: var(--space-xl); }
-.experiment-hero.compact-hero { display: block; padding: var(--space-lg); }
+.experiment-hero { display: none; }
+.experiment-hero.compact-hero { display: none; }
 .experiment-hero h2,
 .reference-hero h2 { color: var(--text-primary); font-size: 26px; line-height: 1.2; margin-bottom: 8px; }
 .compact-hero h2 { font-size: 22px; margin-bottom: 6px; }
@@ -1441,19 +1514,23 @@ onBeforeUnmount(() => {
 .boundary-panel p,
 .pareto-summary p,
 .moment-card p,
-.recommendation p { color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
 .run-state { background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-md); padding: var(--space-lg); }
 .inline-state { min-width: 220px; padding: 12px; }
 .run-state.running { border-color: rgba(0, 212, 255, 0.48); box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.08); }
+.run-state strong { color: var(--accent-cyan); display: block; font-size: 20px; line-height: 1.2; }
 .run-state span,
 .control-field span,
 .reference-facts span,
 .revenue-card span,
 .kpi-card span,
 .moment-card span,
-.weather-now-grid span,
-.recommendation span { color: var(--text-secondary); display: block; font-size: 11px; margin-bottom: 4px; }
-.run-state strong { color: var(--accent-cyan); display: block; font-size: 24px; line-height: 1.2; }
+.weather-now-grid span { color: var(--text-secondary); display: block; font-size: 12px; line-height: 1.4; }
+.control-field span { color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; }
+.reference-facts span,
+.revenue-card span,
+.kpi-card span,
+.moment-card span,
+.weather-now-grid span { color: var(--text-tertiary); }
 .inline-state strong { font-size: 18px; }
 .run-state small,
 .revenue-card small,
@@ -1468,17 +1545,18 @@ onBeforeUnmount(() => {
 .experiment-error strong { color: var(--accent-red); display: block; font-size: 13px; margin-bottom: 4px; }
 .experiment-error p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; margin: 0; }
 .experiment-error small { color: var(--text-tertiary); display: block; font-size: 11px; line-height: 1.5; margin-top: 4px; }
-.control-panel { padding: var(--space-lg); }
-.control-header { align-items: start; display: flex; gap: var(--space-md); justify-content: space-between; }
+.control-panel { padding: 0; }
+.control-header { align-items: center; border-bottom: 1px solid #ebeef5; display: flex; gap: var(--space-md); justify-content: space-between; min-height: 58px; padding: 0 20px; }
 .section-title p,
 .tab-description,
 .chart-caption,
 .table-note { color: var(--text-tertiary); font-size: 12px; line-height: 1.55; margin-top: 6px; }
+.experiment-left > :deep(.chart-card:first-child) .tab-description { display: none; }
 .text-help { background: transparent; border: 0; color: var(--accent-cyan); cursor: help; font-size: 12px; margin-top: 6px; padding: 0; }
-.control-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-md); margin-top: var(--space-md); }
-.storage-grid { border-top: 1px solid var(--border-glass); display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-md); margin-top: var(--space-lg); padding-top: var(--space-lg); }
+.control-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-md); padding: 20px 20px 0; }
+.storage-grid { border-top: 1px solid #ebeef5; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-md); margin: 18px 20px 0; padding-top: 18px; }
 .control-field { min-width: 0; }
-.action-row { align-items: center; display: flex; flex-wrap: wrap; gap: var(--space-sm); justify-content: flex-end; margin-top: var(--space-lg); }
+.action-row { align-items: center; display: flex; flex-wrap: wrap; gap: var(--space-sm); justify-content: flex-end; padding: 18px 20px 20px; }
 .experiment-main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: var(--space-lg); }
 .experiment-left { display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0; }
 .weather-input-grid { display: grid; grid-template-columns: 220px minmax(340px, 1fr) minmax(340px, 1fr); gap: var(--space-lg); }
@@ -1487,16 +1565,17 @@ onBeforeUnmount(() => {
 .weather-now-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .weather-now-grid div { background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-sm); padding: 10px; }
 .weather-now-grid strong { color: var(--text-primary); font-size: 15px; }
-.kpi-panel { align-self: start; padding: var(--space-lg); position: sticky; top: var(--space-lg); }
-.kpi-section { border-top: 1px solid var(--border-glass); margin-top: 12px; padding-top: 12px; }
+.kpi-panel { align-self: start; padding: 0; position: sticky; top: var(--space-lg); }
+.kpi-panel .section-title { border-bottom: 1px solid #ebeef5; min-height: 58px; padding: 14px 20px 0; }
+.kpi-section { border-top: 0; margin: 0; padding: 18px 20px 0; }
 .kpi-section h4 { color: var(--text-primary); font-size: 13px; margin-bottom: 8px; }
 .kpi-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .compact-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.kpi-card { background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-sm); padding: 12px; }
-.kpi-card strong { color: var(--text-primary); display: block; font-size: 19px; line-height: 1.2; white-space: nowrap; }
+.kpi-card { background: #f7f8fa; border: 0; border-radius: 2px; padding: 16px; }
+.kpi-card strong { color: #409eff; display: block; font-size: 24px; line-height: 1.2; white-space: nowrap; }
 .kpi-card.positive-card strong { color: var(--accent-green); }
 .kpi-card.warning-card strong { color: var(--accent-orange); }
-.moment-card { border-top: 1px solid var(--border-glass); margin-top: var(--space-md); padding-top: var(--space-md); }
+.moment-card { border-top: 1px solid #ebeef5; margin: 16px 20px 0; padding: 16px 0 20px; }
 .moment-card strong { color: var(--accent-cyan); display: block; font-size: 16px; margin-bottom: 6px; }
 .mini-tabs { min-width: 360px; }
 .mini-tabs :deep(.el-tabs__header) { margin: 0; }
@@ -1506,11 +1585,59 @@ onBeforeUnmount(() => {
 .history-panel { min-width: 0; padding: var(--space-lg); }
 .history-table { margin-top: var(--space-md); }
 .scheme-name { color: var(--text-primary); font-weight: 700; }
+.showcase-detail {
+  display: grid;
+  gap: 8px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  padding: 12px 16px;
+}
+.showcase-detail span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.showcase-detail strong { color: var(--text-primary); }
+.scenario-explain-list {
+  border-top: 1px solid var(--border-glass);
+  display: grid;
+  gap: 10px;
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+}
+.scenario-explain-list h4 {
+  color: var(--text-primary);
+  font-size: 13px;
+  margin: 0;
+}
+.scenario-explain-item {
+  background: var(--bg-input);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+.scenario-explain-item strong {
+  color: var(--text-primary);
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.scenario-explain-item p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+}
+.scenario-explain-item small {
+  color: var(--text-tertiary);
+  display: block;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
 .scheme-badge { background: rgba(255,255,255,0.08); border-radius: var(--radius-full); color: var(--text-secondary); display: inline-flex; font-size: 11px; font-weight: 700; padding: 2px 8px; white-space: nowrap; }
 .scheme-badge.recommended { background: rgba(0, 255, 136, 0.14); color: var(--accent-green); }
 .scheme-badge.not-recommended { background: rgba(255, 82, 82, 0.12); color: var(--accent-red); }
 :deep(.recommended-row) { background: rgba(0, 255, 136, 0.04); }
-.recommendation { border-top: 1px solid var(--border-glass); margin-top: var(--space-md); padding-top: var(--space-md); }
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-lg); }
 .revenue-card { padding: var(--space-lg); }
 .revenue-card strong { display: block; font-size: 20px; line-height: 1.25; white-space: nowrap; }

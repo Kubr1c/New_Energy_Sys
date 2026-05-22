@@ -9,12 +9,16 @@
       :icon="item.icon"
       :icon-type="item.iconType"
       :gradient="item.gradient"
+      :clickable="Boolean(item.clickable)"
+      @click="$emit('item-click', item)"
     />
   </div>
 </template>
 
 <script setup>
 import MetricCard from './MetricCard.vue'
+
+defineEmits(['item-click'])
 
 defineProps({
   items: {

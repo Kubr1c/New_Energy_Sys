@@ -1,41 +1,41 @@
 /**
- * ECharts dark-tech theme registration.
+ * ECharts admin theme registration.
  * Import this file once in main.js to register the 'dark-tech' theme globally.
  */
 import * as echarts from 'echarts/core'
 
 const darkTechTheme = {
-  color: ['#00d4ff', '#00f5a0', '#ffa726', '#ff5252', '#b388ff', '#64b5f6', '#ffee58', '#4dd0e1'],
+  color: ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4'],
   backgroundColor: 'transparent',
-  textStyle: { color: 'rgba(255,255,255,0.85)', fontFamily: 'Inter, sans-serif' },
+  textStyle: { color: '#303133', fontFamily: 'Inter, sans-serif' },
   title: {
-    textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 16, fontWeight: 600 },
-    subtextStyle: { color: 'rgba(255,255,255,0.45)', fontSize: 12 },
+    textStyle: { color: '#303133', fontSize: 16, fontWeight: 600 },
+    subtextStyle: { color: '#909399', fontSize: 12 },
   },
   legend: {
-    textStyle: { color: 'rgba(255,255,255,0.65)' },
+    textStyle: { color: '#606266' },
   },
   tooltip: {
-    backgroundColor: 'rgba(10, 14, 39, 0.92)',
-    borderColor: 'rgba(0, 212, 255, 0.25)',
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderColor: '#dcdfe6',
     borderWidth: 1,
-    textStyle: { color: 'rgba(255,255,255,0.9)', fontSize: 13 },
-    extraCssText: 'backdrop-filter: blur(12px); border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,0.4);',
+    textStyle: { color: '#303133', fontSize: 13 },
+    extraCssText: 'border-radius: 4px; box-shadow: 0 4px 16px rgba(31,45,61,0.12);',
   },
   grid: {
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: '#ebeef5',
   },
   categoryAxis: {
-    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.12)' } },
-    axisTick: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
-    axisLabel: { color: 'rgba(255,255,255,0.55)' },
-    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
+    axisLine: { lineStyle: { color: '#dcdfe6' } },
+    axisTick: { lineStyle: { color: '#ebeef5' } },
+    axisLabel: { color: '#606266' },
+    splitLine: { lineStyle: { color: '#ebeef5' } },
   },
   valueAxis: {
-    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.12)' } },
-    axisTick: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
-    axisLabel: { color: 'rgba(255,255,255,0.55)' },
-    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)', type: 'dashed' } },
+    axisLine: { lineStyle: { color: '#dcdfe6' } },
+    axisTick: { lineStyle: { color: '#ebeef5' } },
+    axisLabel: { color: '#606266' },
+    splitLine: { lineStyle: { color: '#ebeef5', type: 'solid' } },
   },
   line: {
     smooth: true,
@@ -47,9 +47,9 @@ const darkTechTheme = {
     itemStyle: { borderRadius: [4, 4, 0, 0] },
   },
   radar: {
-    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.12)' } },
-    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
-    splitArea: { areaStyle: { color: ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.04)'] } },
+    axisLine: { lineStyle: { color: '#dcdfe6' } },
+    splitLine: { lineStyle: { color: '#ebeef5' } },
+    splitArea: { areaStyle: { color: ['rgba(64,158,255,0.03)', 'rgba(64,158,255,0.06)'] } },
   },
   gauge: {
     axisLine: { lineStyle: { color: [[0.3, '#ff5252'], [0.7, '#ffa726'], [1, '#00f5a0']] } },

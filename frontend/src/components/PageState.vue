@@ -46,7 +46,9 @@ defineEmits(['retry'])
   gap: 16px;
   padding: var(--space-xl);
   text-align: left;
-  background: rgba(17, 22, 51, 0.78);
+  background: #ffffff;
+  border: 1px solid var(--border-glass);
+  box-shadow: none;
 }
 .state-icon {
   color: var(--accent-cyan);
@@ -69,14 +71,14 @@ defineEmits(['retry'])
 .retry-btn {
   border: 1px solid var(--border-active);
   border-radius: var(--radius-sm);
-  background: rgba(0, 212, 255, 0.1);
+  background: rgba(64, 158, 255, 0.08);
   color: var(--accent-cyan);
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
   padding: 8px 14px;
 }
-.retry-btn:hover { background: rgba(0, 212, 255, 0.18); }
+.retry-btn:hover { background: rgba(64, 158, 255, 0.14); }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin {
   from { transform: rotate(0deg); }

@@ -433,13 +433,10 @@ def normalize_experiment_params(params: ExperimentParams) -> ExperimentParams:
 
 def build_weather_rows(forecast_rows: list[dict[str, Any]], params: ExperimentParams) -> list[dict[str, Any]]:
     profile = WEATHER_PROFILES[params.weather_scenario]
-    start = _parse_dispatch_start(params.dispatch_date)
     output = []
     for index in range(params.horizon_hours):
         source = forecast_rows[index % len(forecast_rows)]
-        valid_time = start.isoformat() if index == 0 and start else source["forecast_valid_time"]
-        if start:
-            valid_time = datetime.fromtimestamp(start.timestamp() + index * 3600, tz=timezone.utc).isoformat()
+        valid_time = source["forecast_valid_time"]
         ghi = _clamp(_num(source.get("ghi_wm2"), 0.0) * profile["ghi"], 0, 1100)
         pv_kw = _clamp(params.capacity_kw * ghi / 1000 * DEFAULT_PERFORMANCE_RATIO, 0, params.capacity_kw)
         row = {

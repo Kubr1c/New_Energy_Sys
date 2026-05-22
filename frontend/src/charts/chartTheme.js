@@ -1,16 +1,16 @@
-import { featureSetLabel, modelLabel } from '../utils/displayLabels'
+import { featureSetLabel, modelLabel, targetLabel } from '../utils/displayLabels'
 
 export const chartColors = {
-  cyan: '#00d4ff',
-  green: '#00f5a0',
-  orange: '#ffa726',
-  red: '#ff5252',
-  purple: '#b388ff',
-  blue: '#64b5f6',
-  yellow: '#ffee58',
-  magenta: '#ff4fd8',
-  teal: '#2dd4bf',
-  indigo: '#818cf8',
+  cyan: '#0891b2',
+  green: '#16a34a',
+  orange: '#ea580c',
+  red: '#dc2626',
+  purple: '#7c3aed',
+  blue: '#2563eb',
+  yellow: '#d97706',
+  magenta: '#c026d3',
+  teal: '#0d9488',
+  indigo: '#4f46e5',
 }
 
 export const modelColors = {
@@ -22,8 +22,8 @@ export const modelColors = {
   random_forest: chartColors.blue,
   ridge: chartColors.red,
   elastic_net: chartColors.yellow,
-  persistence: '#8a92a6',
-  persistence_baseline: '#8a92a6',
+  persistence: '#64748b',
+  persistence_baseline: '#64748b',
   tcn: chartColors.cyan,
   dlinear: chartColors.magenta,
   cnn_lstm: chartColors.teal,
@@ -46,4 +46,8 @@ export function shortFeature(featureSet) {
 
 export function shortModel(model) {
   return modelLabel(model)
+}
+
+export function shortTarget(target) {
+  return targetLabel(target)
 }

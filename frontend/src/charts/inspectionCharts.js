@@ -24,41 +24,42 @@ const SERIES_LABELS = {
 const SCENARIO_STYLES = {
   clear: {
     label: '晴天',
-    color: '#ffe45c',
-    area: 'rgba(255, 228, 92, 0.13)',
-    border: 'rgba(255, 228, 92, 0.34)',
+    color: '#f59e0b',
+    area: 'rgba(245, 158, 11, 0.08)',
+    border: 'rgba(245, 158, 11, 0.22)',
     lineType: 'solid',
   },
   mixed: {
     label: '多云',
-    color: '#35d3ff',
-    area: 'rgba(53, 211, 255, 0.12)',
-    border: 'rgba(53, 211, 255, 0.34)',
+    color: '#2563eb',
+    area: 'rgba(37, 99, 235, 0.06)',
+    border: 'rgba(37, 99, 235, 0.18)',
     lineType: 'dashed',
   },
   overcast: {
     label: '阴天',
-    color: '#f472ff',
-    area: 'rgba(244, 114, 255, 0.12)',
-    border: 'rgba(244, 114, 255, 0.34)',
+    color: '#7c3aed',
+    area: 'rgba(124, 58, 237, 0.06)',
+    border: 'rgba(124, 58, 237, 0.18)',
     lineType: [8, 4, 2, 4],
   },
   all: {
     label: '全部场景',
-    color: '#ffffff',
-    area: 'rgba(255, 255, 255, 0.08)',
-    border: 'rgba(255, 255, 255, 0.22)',
+    color: '#64748b',
+    area: 'rgba(148, 163, 184, 0.06)',
+    border: 'rgba(148, 163, 184, 0.18)',
     lineType: 'solid',
   },
 }
 
-const AXIS_TEXT_STYLE = { fontSize: 11, color: 'rgba(255,255,255,0.78)' }
+const AXIS_TEXT_STYLE = { fontSize: 11, color: '#606266' }
 const TOOLTIP_STYLE = {
-  backgroundColor: 'rgba(10,14,39,0.95)',
-  borderColor: 'rgba(0,212,255,0.32)',
+  backgroundColor: 'rgba(255,255,255,0.98)',
+  borderColor: '#dcdfe6',
   borderWidth: 1,
-  textStyle: { color: 'rgba(255,255,255,0.92)', fontSize: 12 },
+  textStyle: { color: '#303133', fontSize: 12 },
   confine: true,
+  extraCssText: 'border-radius: 4px; box-shadow: 0 4px 16px rgba(31,45,61,0.12);',
 }
 
 function horizonLabel(horizon) {
@@ -101,7 +102,7 @@ function emptyOption(title = '暂无数据') {
       text: title,
       left: 'center',
       top: 'center',
-      textStyle: { color: 'rgba(255,255,255,0.72)', fontSize: 14 },
+      textStyle: { color: '#909399', fontSize: 14 },
     },
     grid: [],
     xAxis: [],
@@ -324,7 +325,7 @@ function buildHourlyInspectionChart(rawData, options) {
     { xAxis: item.start[1] },
   ])
   const nightMarkData = buildNightMarkAreas(grouped.timePoints, grouped.solarElevations).map(item => [
-    { xAxis: item[0], itemStyle: { color: 'rgba(120,126,150,0.18)' } },
+    { xAxis: item[0], itemStyle: { color: 'rgba(148,163,184,0.16)' } },
     { xAxis: item[1] },
   ])
 
@@ -346,12 +347,12 @@ function buildHourlyInspectionChart(rawData, options) {
     data: grouped.errorSeriesMap[horizon],
     barGap: horizons.length > 1 ? '10%' : '30%',
     barMaxWidth: 20,
-    itemStyle: { color: params => (params.value != null && params.value >= 0 ? '#ff5252' : '#64b5f6') },
+    itemStyle: { color: params => (params.value != null && params.value >= 0 ? '#f56c6c' : '#409eff') },
     markLine: {
       silent: true,
       symbol: 'none',
       animation: false,
-      lineStyle: { color: 'rgba(255,255,255,0.34)', type: 'dashed', width: 1 },
+      lineStyle: { color: '#c0c4cc', type: 'dashed', width: 1 },
       label: { show: false },
       data: [{ yAxis: 0 }],
     },
@@ -365,7 +366,7 @@ function buildHourlyInspectionChart(rawData, options) {
     const elevation = grouped.solarElevations[timeIdx]
     const scene = grouped.scenarios[timeIdx]
     const lines = ['<div style="font-size:12px;line-height:1.8;">']
-    lines.push(`<div><strong style="color:#00d4ff;">${time}</strong></div>`)
+    lines.push(`<div><strong style="color:#409eff;">${time}</strong></div>`)
     lines.push(`<div>太阳高度角：${elevation != null ? Number(elevation).toFixed(1) + '°' : '-'}</div>`)
     if (scene) lines.push(`<div>天气场景：${compactScenarioLabel(scene)}</div>`)
 
@@ -380,8 +381,8 @@ function buildHourlyInspectionChart(rawData, options) {
       const match = findRow(grouped.sorted, time, horizon, experiment)
       const originTime = match?.origin_time || ''
       if (prediction != null) {
-        const errorColor = error != null ? (error >= 0 ? '#ff5252' : '#64b5f6') : '#999'
-        lines.push('<hr style="border-color:rgba(255,255,255,0.1);margin:4px 0;">')
+        const errorColor = error != null ? (error >= 0 ? '#f56c6c' : '#409eff') : '#999'
+        lines.push('<hr style="border-color:#ebeef5;margin:4px 0;">')
         lines.push(`<div><strong>${horizonLabel(horizon)}</strong> | 预测起点：${originTime ? originTime.slice(5, 16) : '-'}</div>`)
         lines.push(`<div>预测功率：${formatNumber(prediction)} kW</div>`)
         if (error != null) lines.push(`<div>${SERIES_LABELS.errorPower}：<span style="color:${errorColor};font-weight:600;">${formatNumber(error, 4)}</span> kW</div>`)
@@ -398,7 +399,7 @@ function buildHourlyInspectionChart(rawData, options) {
       text: '实际功率与预测功率对比',
       left: 56,
       top: 6,
-      textStyle: { color: 'rgba(255,255,255,0.9)', fontSize: 13, fontWeight: 700 },
+      textStyle: { color: '#303133', fontSize: 13, fontWeight: 700 },
     },
     tooltip: { trigger: 'axis', formatter: tooltipFormatter, ...TOOLTIP_STYLE },
     legend: {
@@ -410,8 +411,8 @@ function buildHourlyInspectionChart(rawData, options) {
       top: 28,
       itemWidth: 16,
       itemHeight: 3,
-      textStyle: { color: 'rgba(255,255,255,0.84)', fontSize: 11 },
-      pageIconColor: '#00d4ff',
+      textStyle: { color: '#606266', fontSize: 11 },
+      pageIconColor: '#409eff',
     },
     grid: [
       { id: 'upper', left: 56, right: 24, top: 68, bottom: '34%' },
@@ -427,7 +428,7 @@ function buildHourlyInspectionChart(rawData, options) {
         interval: labelInterval,
         ...AXIS_TEXT_STYLE,
       },
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.24)' } },
+      axisLine: { lineStyle: { color: '#dcdfe6' } },
       splitLine: { show: false },
     })),
     yAxis: [
@@ -437,7 +438,7 @@ function buildHourlyInspectionChart(rawData, options) {
         name: '功率 (kW)',
         nameTextStyle: AXIS_TEXT_STYLE,
         axisLabel: AXIS_TEXT_STYLE,
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.1)', type: 'dashed' } },
+        splitLine: { lineStyle: { color: '#ebeef5', type: 'dashed' } },
       },
       {
         gridIndex: 1,
@@ -445,7 +446,7 @@ function buildHourlyInspectionChart(rawData, options) {
         name: '误差 (kW)',
         nameTextStyle: AXIS_TEXT_STYLE,
         axisLabel: AXIS_TEXT_STYLE,
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.1)', type: 'dashed' } },
+        splitLine: { lineStyle: { color: '#ebeef5', type: 'dashed' } },
       },
     ],
     dataZoom: [
@@ -455,11 +456,11 @@ function buildHourlyInspectionChart(rawData, options) {
         xAxisIndex: [0, 1],
         height: 18,
         bottom: 4,
-        borderColor: 'rgba(0,212,255,0.24)',
-        backgroundColor: 'rgba(0,0,0,0.2)',
-        fillerColor: 'rgba(0,212,255,0.15)',
-        handleStyle: { color: '#00d4ff' },
-        textStyle: { fontSize: 10, color: 'rgba(255,255,255,0.76)' },
+        borderColor: '#dcdfe6',
+        backgroundColor: '#f5f7fa',
+        fillerColor: 'rgba(64,158,255,0.16)',
+        handleStyle: { color: '#409eff' },
+        textStyle: { fontSize: 10, color: '#606266' },
         labelFormatter: value => formatZoomLabel(value, grouped.timePoints),
       },
     ],
@@ -482,8 +483,8 @@ function buildHourlyInspectionChart(rawData, options) {
         name: SERIES_LABELS.persistence,
         type: 'line',
         data: grouped.persistenceData,
-        lineStyle: { color: '#b8c4d9', width: 1.7, type: 'dashed' },
-        itemStyle: { color: '#b8c4d9' },
+        lineStyle: { color: '#94a3b8', width: 1.7, type: 'dashed' },
+        itemStyle: { color: '#94a3b8' },
         symbol: 'triangle',
         showSymbol: true,
         symbolSize: 4,
@@ -528,13 +529,13 @@ function buildDailyInspectionChart(rawData, options) {
     if (!first) return ''
     const idx = first.dataIndex
     const row = rows[idx]
-    const errorColor = Number(row.errorKwh) >= 0 ? '#ff5252' : '#64b5f6'
+    const errorColor = Number(row.errorKwh) >= 0 ? '#f56c6c' : '#409eff'
     const periodLabel = row.startDate === row.endDate
       ? row.startDate
       : `${row.startDate} ~ ${row.endDate}`
     return [
       '<div style="font-size:12px;line-height:1.8;">',
-      `<div><strong style="color:#00d4ff;">${periodLabel}</strong></div>`,
+      `<div><strong style="color:#409eff;">${periodLabel}</strong></div>`,
       `<div>覆盖天数：${row.windowDays || 1} 天</div>`,
       `<div>天气场景：${compactScenarioLabel(row.scenario)}</div>`,
       `<div>预测时长：${horizonLabel(mainHorizon)}</div>`,
@@ -550,7 +551,7 @@ function buildDailyInspectionChart(rawData, options) {
       text: title,
       left: 56,
       top: 6,
-      textStyle: { color: 'rgba(255,255,255,0.9)', fontSize: 13, fontWeight: 700 },
+      textStyle: { color: '#303133', fontSize: 13, fontWeight: 700 },
     },
     tooltip: { trigger: 'axis', formatter: tooltipFormatter, ...TOOLTIP_STYLE },
     legend: {
@@ -560,7 +561,7 @@ function buildDailyInspectionChart(rawData, options) {
         { name: SERIES_LABELS.errorEnergy, icon: 'rect' },
       ],
       top: 32,
-      textStyle: { color: 'rgba(255,255,255,0.84)', fontSize: 11 },
+      textStyle: { color: '#606266', fontSize: 11 },
     },
     grid: [
       { id: 'energy', left: 60, right: 28, top: 74, bottom: '35%' },
@@ -575,7 +576,7 @@ function buildDailyInspectionChart(rawData, options) {
         hideOverlap: true,
         ...AXIS_TEXT_STYLE,
       },
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.24)' } },
+      axisLine: { lineStyle: { color: '#dcdfe6' } },
       splitLine: { show: false },
     })),
     yAxis: [
@@ -585,7 +586,7 @@ function buildDailyInspectionChart(rawData, options) {
         name: '发电量 (kWh)',
         nameTextStyle: AXIS_TEXT_STYLE,
         axisLabel: AXIS_TEXT_STYLE,
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.1)', type: 'dashed' } },
+        splitLine: { lineStyle: { color: '#ebeef5', type: 'dashed' } },
       },
       {
         gridIndex: 1,
@@ -593,7 +594,7 @@ function buildDailyInspectionChart(rawData, options) {
         name: '误差 (kWh)',
         nameTextStyle: AXIS_TEXT_STYLE,
         axisLabel: AXIS_TEXT_STYLE,
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.1)', type: 'dashed' } },
+        splitLine: { lineStyle: { color: '#ebeef5', type: 'dashed' } },
       },
     ],
     series: [
@@ -628,15 +629,15 @@ function buildDailyInspectionChart(rawData, options) {
         barMaxWidth: 34,
         itemStyle: {
           color: params => {
-            if (params.value == null) return 'rgba(255,255,255,0.18)'
-            return params.value >= 0 ? '#ff5252' : '#64b5f6'
+            if (params.value == null) return 'rgba(148,163,184,0.18)'
+            return params.value >= 0 ? '#f56c6c' : '#409eff'
           },
         },
         markLine: {
           silent: true,
           symbol: 'none',
           animation: false,
-          lineStyle: { color: 'rgba(255,255,255,0.34)', type: 'dashed', width: 1 },
+          lineStyle: { color: '#c0c4cc', type: 'dashed', width: 1 },
           label: { show: false },
           data: [{ yAxis: 0 }],
         },

@@ -28,13 +28,13 @@
 
       <div class="explorer-tabs">
         <el-radio-group v-model="explorerMode" size="small">
-          <el-radio-button value="forecast">预测特征贡献</el-radio-button>
-          <el-radio-button value="dispatch">调度收益贡献</el-radio-button>
+          <el-radio-button value="forecast">预测字段</el-radio-button>
+          <el-radio-button value="dispatch">收益构成</el-radio-button>
         </el-radio-group>
       </div>
 
       <template v-if="explorerMode === 'forecast'">
-        <PageSection title="字段完整性检查">
+        <PageSection title="数据质量检查结果">
         <div class="integrity-grid">
           <div v-for="item in integritySummary" :key="item.label" class="integrity-item">
             <span>{{ item.label }}</span>
@@ -57,8 +57,8 @@
         />
       </PageSection>
 
-      <ChartCard title="预测特征贡献 Top20">
-        <p class="section-help">特征重要性用于展示各输入变量对预测结果的相对贡献。图中使用中文字段名，原始字段名保留在提示信息中用于排查。</p>
+      <ChartCard title="预测特征重要性">
+        <p class="section-help">展示当前模型使用的主要输入字段，分数越高表示该字段在模型内部的重要性越高。</p>
         <PageState
           v-if="!hasPositiveFeatures"
           type="empty"
@@ -68,7 +68,7 @@
         <v-chart v-else class="feat-chart" :option="featureChartOption" theme="dark-tech" autoresize />
       </ChartCard>
 
-      <PageSection title="模型训练 / 调度仿真">
+      <PageSection title="实验任务入口">
         <div class="task-grid">
           <div v-for="cmd in displayCommands" :key="cmd.command_id" class="task-item">
             <div class="task-copy">
@@ -131,39 +131,49 @@
       </template>
 
       <template v-else>
-        <ChartCard title="调度收益影响程度">
-          <p class="section-help">该图基于储能配置敏感性与收益情景结果进行相对影响分析，用于辅助判断容量、功率、约束和经济条件对仿真收益的影响。</p>
+        <ChartCard title="收益构成">
+          <p class="section-help">展示收益、额外收益和退化成本如何共同影响结果。</p>
           <PageState
             v-if="comparisonLoading"
             type="loading"
-            title="正在加载调度收益贡献"
-            message="正在从调度展示与配置敏感性接口读取情景指标。"
+            title="正在加载调度收益构成"
+            message="正在读取多收益情景指标。"
           />
           <PageState
             v-else-if="comparisonError"
             type="error"
-            title="调度收益贡献加载失败"
+            title="调度收益构成加载失败"
             :message="comparisonError.message"
             retryable
             @retry="loadComparisonData"
           />
           <PageState
-            v-else-if="!dispatchImportanceRows.length"
+            v-else-if="!dispatchScenarioRows.length"
             type="empty"
-            title="暂无调度收益贡献"
-            message="当前缺少储能调度敏感性结果，无法生成调度收益影响程度。"
+            title="暂无调度收益构成数据"
+            message="当前缺少多收益情景结果，无法生成调度收益构成对比。"
             retryable
             @retry="loadComparisonData"
           />
           <template v-else>
-            <v-chart class="feat-chart" :option="dispatchImportanceOption" theme="dark-tech" autoresize />
-            <el-table :data="dispatchImportanceRows" stripe size="small" max-height="360" style="width: 100%">
-              <el-table-column prop="label" label="影响因素" min-width="160" />
-              <el-table-column prop="score" label="相对影响程度" width="130" sortable>
-                <template #default="{ row }">{{ row.score.toFixed(1) }}</template>
+            <v-chart class="feat-chart" :option="dispatchRevenueOption" theme="dark-tech" autoresize />
+            <el-table :data="dispatchScenarioRows" stripe size="small" max-height="360" style="width: 100%">
+              <el-table-column prop="label" label="收益情景" min-width="190" show-overflow-tooltip />
+              <el-table-column label="相比无储能收益" min-width="150" sortable>
+                <template #default="{ row }"><strong :class="row.netValue >= 0 ? 'positive' : 'negative'">{{ formatComparisonCurrency(row.netValue) }}</strong></template>
               </el-table-column>
-              <el-table-column prop="direction" label="方向说明" min-width="160" show-overflow-tooltip />
-              <el-table-column prop="basis" label="计算依据" min-width="260" show-overflow-tooltip />
+              <el-table-column label="毛增量收益" min-width="130">
+                <template #default="{ row }">{{ formatComparisonCurrency(row.grossValue) }}</template>
+              </el-table-column>
+              <el-table-column label="退化成本" min-width="120">
+                <template #default="{ row }">{{ formatComparisonCurrency(row.degradationValue) }}</template>
+              </el-table-column>
+              <el-table-column label="额外收益" min-width="120">
+                <template #default="{ row }">{{ formatComparisonCurrency(row.additionalValue) }}</template>
+              </el-table-column>
+              <el-table-column label="SOH" width="90">
+                <template #default="{ row }">{{ formatPercent(row.sohValue) }}</template>
+              </el-table-column>
             </el-table>
           </template>
         </ChartCard>
@@ -186,9 +196,9 @@ import PageSection from '../components/PageSection.vue'
 import PageState from '../components/PageState.vue'
 import { buildFeatureImportanceOption, featureImportanceScore } from '../charts/dataExplorerCharts'
 import { fetchDataExplorerBundle, fetchTasks, fetchTaskStatus, submitTaskCommand } from '../services/dataExplorerService'
-import { fetchSensitivityMetrics } from '../services/governanceService'
 import { fetchShowcaseScenarios } from '../services/dispatchService'
 import { normalizeApiError } from '../utils/api'
+import { eurToCny, formatYuan, formatYuanFromEur, replaceEurUnitsInText } from '../utils/currency'
 import { featureFieldLabel, taskLabel, taskType } from '../utils/displayLabels'
 
 use([CanvasRenderer, BarChart, TitleComponent, TooltipComponent, GridComponent])
@@ -210,7 +220,6 @@ const explorerMode = ref('forecast')
 const comparisonLoading = ref(false)
 const comparisonError = ref(null)
 const showcaseScenarios = ref([])
-const sensitivityMetrics = ref([])
 
 const hasExplorerData = computed(() => Boolean(quality.value) || features.value.length > 0 || commands.value.length > 0)
 const hasPositiveFeatures = computed(() => features.value.some(feature => featureImportanceScore(feature) > 0))
@@ -259,7 +268,6 @@ const dataInsight = computed(() => ({
 }))
 const qualityCards = computed(() => [
   { label: '样本数量', value: valueOrIssue(quality.value?.rows?.final_cleaned), icon: 'DataLine', gradient: 'var(--gradient-cyan)' },
-  { label: '字段数量', value: valueOrIssue(quality.value?.schema?.column_count ?? quality.value?.columns?.total), icon: 'Document', gradient: 'var(--gradient-green)' },
   { label: '缺失字段数', value: missingFieldCount.value, icon: 'Warning', gradient: missingFieldCount.value ? 'var(--gradient-orange)' : 'var(--gradient-green)' },
   { label: '数据覆盖率', value: coverageText.value, icon: 'TrendCharts', gradient: 'var(--gradient-purple)' },
 ])
@@ -279,154 +287,82 @@ const integritySummary = computed(() => {
   const timeMissing = positiveMissingRows.value.filter(row => /time|date|hour/i.test(row.field)).length
   return [
     { label: '字段缺失', value: `${missingFieldCount.value} 个`, ok: missingFieldCount.value === 0, hint: missingFieldCount.value === 0 ? '未发现缺失字段' : '存在需要处理的字段' },
-    { label: '时间字段完整性', value: timeMissing === 0 && hasTime ? '完整' : '需检查', ok: timeMissing === 0 && hasTime, hint: `覆盖率 ${coverageText.value}` },
+    { label: '时间字段状态', value: timeMissing === 0 && hasTime ? '字段存在' : '需检查', ok: timeMissing === 0 && hasTime, hint: '依据清洗质量报告统计' },
+    { label: '样本时间覆盖率', value: coverageText.value, ok: Number.isFinite(timeCoverage) && timeCoverage > 0, hint: '反映目标小时样本覆盖程度' },
     { label: '目标字段完整性', value: targetMissing === 0 ? '完整' : '需检查', ok: targetMissing === 0, hint: targetMissing === 0 ? '目标功率字段可用' : '目标字段存在缺失' },
-    { label: '特征字段完整性', value: missingFieldCount.value === 0 ? '完整' : '需检查', ok: missingFieldCount.value === 0, hint: `${valueOrIssue(quality.value?.schema?.column_count ?? quality.value?.columns?.total)} 个字段参与检查` },
+    { label: '特征字段完整性', value: missingFieldCount.value === 0 ? '完整' : '需检查', ok: missingFieldCount.value === 0, hint: '依据清洗质量报告统计' },
   ]
 })
 
-const comparisonRows = computed(() => {
-  const scenarios = [...showcaseScenarios.value]
-  const maxNet = Math.max(...scenarios.map(s => Math.abs(Number(s.net_incremental_revenue_eur) || 0)), 1)
-  return scenarios
+const dispatchScenarioRows = computed(() => buildDispatchScenarioRows(showcaseScenarios.value))
+const dispatchRevenueOption = computed(() => buildDispatchRevenueOption(dispatchScenarioRows.value))
+
+function buildDispatchScenarioRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
     .map(row => {
-      const net = Number(row.net_incremental_revenue_eur) || 0
-      const soh = Number(row.soh_end)
-      const constraintsOk = row.constraints_passed !== false
-      const score = clamp(Math.round((net / maxNet) * 50 + 50), 0, 100)
-      const recommended = net >= 0 && constraintsOk
-      const reasons = []
-      if (net < 0) reasons.push(`净增量收益为负（${formatComparisonCurrency(net)}）`)
-      if (!constraintsOk) reasons.push('调度约束未通过')
-      if (!Number.isFinite(soh) || soh < 0.6) reasons.push(`SOC 健康度过低（${formatPercent(soh)}）`)
-      return { ...row, score, recommended, reason: reasons.join('；') || '' }
+      const netValue = Number(row.net_incremental_revenue_eur)
+      const grossValue = Number(row.gross_incremental_revenue_eur)
+      const degradationValue = Number(row.degradation_cost_eur)
+      const additionalValue = Number(row.additional_revenue_eur)
+      const sohValue = Number(row.soh_end)
+      const constraintsPassed = row.constraints_passed === true || row.constraints_passed === 'True' || row.constraints_passed === 'true'
+      return {
+        ...row,
+        label: replaceEurUnitsInText(row.scenario_name || scenarioTypeLabel(row.scenario_type)),
+        typeLabel: scenarioTypeLabel(row.scenario_type),
+        netValue: Number.isFinite(netValue) ? netValue : 0,
+        grossValue: Number.isFinite(grossValue) ? grossValue : 0,
+        degradationValue: Number.isFinite(degradationValue) ? degradationValue : 0,
+        additionalValue: Number.isFinite(additionalValue) ? additionalValue : 0,
+        sohValue: Number.isFinite(sohValue) ? sohValue : null,
+        constraintsText: constraintsPassed ? '通过' : '未通过',
+      }
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 20)
-})
-
-const dispatchImportanceRows = computed(() => buildDispatchImportanceRows(sensitivityMetrics.value, showcaseScenarios.value))
-const dispatchImportanceOption = computed(() => buildDispatchImportanceOption(dispatchImportanceRows.value))
-
-function buildDispatchImportanceRows(sensitivityRows, scenarioRows) {
-  const rows = Array.isArray(sensitivityRows) ? sensitivityRows : []
-  const factors = [
-    groupedRangeFactor(rows, 'capacity_multiplier', '容量倍率', '按容量倍率分组比较平均增量收益差异'),
-    groupedRangeFactor(rows, 'power_multiplier', '功率倍率', '按功率倍率分组比较平均增量收益差异'),
-    groupedRangeFactor(rows, 'objective_preset', '目标组合', '按目标组合分组比较平均增量收益差异'),
-    numericCorrelationFactor(rows, 'cycle_equivalent_count', '循环强度', '按等效循环次数与增量收益的相关关系估计'),
-    numericCorrelationFactor(rows, 'total_shortfall_kwh', '短缺约束', '按短缺电量与增量收益的相关关系估计'),
-    numericCorrelationFactor(rows, 'total_curtailed_kwh', '弃光影响', '按弃光电量与增量收益的相关关系估计'),
-    numericCorrelationFactor(rows, 'soc_edge_touch_ratio', 'SOC 贴边影响', '按 SOC 贴边比例与增量收益的相关关系估计'),
-    scenarioRangeFactor(scenarioRows),
-  ].filter(Boolean)
-  const maxScore = Math.max(...factors.map(row => row.rawScore), 0)
-  return factors
-    .map(row => ({ ...row, score: maxScore > 0 ? (row.rawScore / maxScore) * 100 : 0 }))
-    .filter(row => row.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.netValue - a.netValue)
 }
 
-function groupedRangeFactor(rows, field, label, basis) {
-  const groups = new Map()
-  for (const row of rows) {
-    const key = row[field]
-    const revenue = Number(row.incremental_revenue_eur)
-    if (key === undefined || key === null || key === '' || !Number.isFinite(revenue)) continue
-    const group = groups.get(String(key)) || []
-    group.push(revenue)
-    groups.set(String(key), group)
-  }
-  if (groups.size < 2) return null
-  const means = [...groups.entries()].map(([key, values]) => ({
-    key,
-    mean: values.reduce((sum, value) => sum + value, 0) / values.length,
-  }))
-  const best = [...means].sort((a, b) => b.mean - a.mean)[0]
-  const worst = [...means].sort((a, b) => a.mean - b.mean)[0]
-  return {
-    factor: field,
-    label,
-    rawScore: Math.abs(best.mean - worst.mean),
-    direction: `${best.key} 组平均收益较高`,
-    basis,
-  }
-}
-
-function numericCorrelationFactor(rows, field, label, basis) {
-  const pairs = rows
-    .map(row => ({ x: Number(row[field]), y: Number(row.incremental_revenue_eur) }))
-    .filter(pair => Number.isFinite(pair.x) && Number.isFinite(pair.y))
-  if (pairs.length < 3) return null
-  const xs = pairs.map(pair => pair.x)
-  const ys = pairs.map(pair => pair.y)
-  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length
-  const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length
-  const cov = pairs.reduce((sum, pair) => sum + (pair.x - meanX) * (pair.y - meanY), 0)
-  const sx = Math.sqrt(xs.reduce((sum, value) => sum + (value - meanX) ** 2, 0))
-  const sy = Math.sqrt(ys.reduce((sum, value) => sum + (value - meanY) ** 2, 0))
-  if (!sx || !sy) return null
-  const corr = cov / (sx * sy)
-  const revenueRange = Math.max(...ys) - Math.min(...ys)
-  return {
-    factor: field,
-    label,
-    rawScore: Math.abs(corr) * Math.abs(revenueRange),
-    direction: corr >= 0 ? '数值升高时收益倾向升高' : '数值升高时收益倾向降低',
-    basis,
-  }
-}
-
-function scenarioRangeFactor(rows) {
-  const values = (Array.isArray(rows) ? rows : [])
-    .map(row => Number(row.net_incremental_revenue_eur))
-    .filter(Number.isFinite)
-  if (values.length < 2) return null
-  return {
-    factor: 'scenario_economic_condition',
-    label: '经济情景条件',
-    rawScore: Math.max(...values) - Math.min(...values),
-    direction: '不同收益情景下净增量收益存在差异',
-    basis: '按多收益情景净增量收益区间估计',
-  }
-}
-
-function buildDispatchImportanceOption(rows) {
+function buildDispatchRevenueOption(rows) {
   if (!rows.length) return {}
-  const sorted = [...rows].sort((a, b) => a.score - b.score)
+  const sorted = [...rows].sort((a, b) => a.netValue - b.netValue)
+  const categories = sorted.map(row => row.label)
+  const tooltipLine = (name, value) => `${name}：${formatYuan(value)}`
   return {
     tooltip: {
       trigger: 'axis',
+      axisPointer: { type: 'shadow' },
       formatter(params) {
-        const item = params?.[0]
-        const row = sorted[item?.dataIndex]
+        const index = params?.[0]?.dataIndex ?? 0
+        const row = sorted[index]
         if (!row) return ''
-        return [`<strong>${row.label}</strong>`, `相对影响程度：${row.score.toFixed(1)}`, row.direction, row.basis].join('<br/>')
+        return [
+          `<strong>${row.label}</strong>`,
+          tooltipLine('相比无储能收益', eurToCny(row.netValue)),
+          tooltipLine('毛增量收益', eurToCny(row.grossValue)),
+          tooltipLine('额外收益', eurToCny(row.additionalValue)),
+          tooltipLine('退化成本', eurToCny(row.degradationValue)),
+          `SOH：${formatPercent(row.sohValue)}`,
+        ].join('<br/>')
       },
     },
-    grid: { left: 150, right: 42, top: 18, bottom: 36 },
+    legend: { data: ['毛增量收益', '额外收益', '退化成本'], top: 0, textStyle: { color: '#606266' } },
+    grid: { left: 210, right: 60, top: 42, bottom: 42 },
     xAxis: {
       type: 'value',
-      name: '相对影响程度',
-      max: 100,
-      nameTextStyle: { color: 'rgba(255,255,255,0.74)' },
-      axisLabel: { color: 'rgba(255,255,255,0.74)' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.10)' } },
+      name: '收益金额（元）',
+      axisLabel: { formatter: value => formatYuan(value, 0), color: '#606266' },
+      splitLine: { lineStyle: { color: '#ebeef5' } },
+      axisLine: { lineStyle: { color: '#dcdfe6' } },
     },
     yAxis: {
       type: 'category',
-      data: sorted.map(row => row.label),
-      axisLabel: { color: 'rgba(255,255,255,0.82)' },
+      data: categories,
+      axisLabel: { width: 190, overflow: 'truncate', color: '#606266' },
+      axisLine: { lineStyle: { color: '#dcdfe6' } },
     },
     series: [
-      {
-        type: 'bar',
-        data: sorted.map((row, index) => ({
-          value: Number(row.score.toFixed(1)),
-          itemStyle: { color: `hsl(${170 + index * 10}, 72%, 54%)` },
-        })),
-        barMaxWidth: 18,
-      },
+      { name: '毛增量收益', type: 'bar', stack: 'revenue', data: sorted.map(row => Number(eurToCny(row.grossValue).toFixed(2))), itemStyle: { color: '#0891b2' } },
+      { name: '额外收益', type: 'bar', stack: 'revenue', data: sorted.map(row => Number(eurToCny(row.additionalValue).toFixed(2))), itemStyle: { color: '#16a34a' } },
+      { name: '退化成本', type: 'bar', stack: 'revenue', data: sorted.map(row => Number((-eurToCny(row.degradationValue)).toFixed(2))), itemStyle: { color: '#ea580c' } },
     ],
   }
 }
@@ -437,8 +373,7 @@ function scenarioTypeLabel(type) {
 }
 
 function formatComparisonCurrency(value) {
-  const n = Number(value)
-  return Number.isFinite(n) ? `${n.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })} EUR` : '—'
+  return formatYuanFromEur(value, 2, '—')
 }
 
 function formatPercent(value) {
@@ -446,18 +381,12 @@ function formatPercent(value) {
   return Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—'
 }
 
-function clamp(value, min, max) { return Math.min(Math.max(Number(value), min), max) }
-
 async function loadComparisonData() {
   comparisonLoading.value = true
   comparisonError.value = null
   try {
-    const [showcase, sensitivity] = await Promise.all([
-      fetchShowcaseScenarios().catch(() => []),
-      fetchSensitivityMetrics().catch(() => []),
-    ])
+    const showcase = await fetchShowcaseScenarios().catch(() => [])
     showcaseScenarios.value = Array.isArray(showcase) ? showcase : []
-    sensitivityMetrics.value = Array.isArray(sensitivity) ? sensitivity : []
   } catch (e) {
     comparisonError.value = e.normalized || normalizeApiError(e)
   } finally {
@@ -672,7 +601,9 @@ async function loadDataExplorer() {
     quality.value = bundle.quality || {}
     features.value = bundle.features || []
     commands.value = bundle.commands || []
-    await loadTasks()
+    await loadTasks().catch(() => {
+      taskHistory.value = []
+    })
   } catch (e) {
     error.value = e.normalized || normalizeApiError(e)
   } finally {
@@ -681,7 +612,7 @@ async function loadDataExplorer() {
 }
 
 watch(explorerMode, (mode) => {
-  if (mode === 'dispatch' && !showcaseScenarios.value.length && !sensitivityMetrics.value.length) {
+  if (mode === 'dispatch' && !showcaseScenarios.value.length) {
     loadComparisonData()
   }
 })

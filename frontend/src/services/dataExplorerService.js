@@ -1,16 +1,21 @@
 import api from '../utils/api'
 
 export async function fetchDataExplorerBundle() {
-  const [qualityRes, featuresRes, commandsRes] = await Promise.all([
+  const [qualityRes, featuresRes, commandsRes] = await Promise.allSettled([
     api.get('/api/data/quality'),
     api.get('/api/features/importance', { params: { top_n: 20 } }),
     api.get('/api/tasks/commands'),
   ])
 
   return {
-    quality: qualityRes.data || {},
-    features: featuresRes.data || [],
-    commands: commandsRes.data || [],
+    quality: qualityRes.status === 'fulfilled' ? (qualityRes.value.data || {}) : {},
+    features: featuresRes.status === 'fulfilled' ? (featuresRes.value.data || []) : [],
+    commands: commandsRes.status === 'fulfilled' ? (commandsRes.value.data || []) : [],
+    errors: {
+      quality: qualityRes.status === 'rejected' ? qualityRes.reason : null,
+      features: featuresRes.status === 'rejected' ? featuresRes.reason : null,
+      commands: commandsRes.status === 'rejected' ? commandsRes.reason : null,
+    },
   }
 }
 

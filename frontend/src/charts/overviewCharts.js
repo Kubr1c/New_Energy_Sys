@@ -9,7 +9,7 @@ export function buildPredictionChartOption(predictions) {
 
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['实际功率', '预测功率'], top: 8, textStyle: { color: 'rgba(255,255,255,0.78)' } },
+    legend: { data: ['实际功率', '预测功率'], top: 8, textStyle: { color: '#606266' } },
     grid: { left: 58, right: 26, top: 48, bottom: 64 },
     xAxis: {
       type: 'category',
@@ -22,7 +22,19 @@ export function buildPredictionChartOption(predictions) {
       },
     },
     yAxis: { type: 'value', name: '功率 (kW)' },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+    dataZoom: [
+      { type: 'inside' },
+      {
+        type: 'slider',
+        height: 20,
+        bottom: 5,
+        borderColor: '#dcdfe6',
+        backgroundColor: '#f5f7fa',
+        fillerColor: 'rgba(64,158,255,0.16)',
+        handleStyle: { color: '#409eff' },
+        textStyle: { color: '#606266' },
+      },
+    ],
     series: [
       {
         name: '实际功率',

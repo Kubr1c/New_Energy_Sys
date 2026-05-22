@@ -74,6 +74,14 @@ const SCENARIO_LABELS = {
 const FEATURE_FIELD_LABELS = {
   hour_sin: '小时周期特征 sin',
   hour_cos: '小时周期特征 cos',
+  hour: '小时',
+  day_of_year: '年内第几日',
+  day_of_year_sin: '年内日期周期特征 sin',
+  day_of_year_cos: '年内日期周期特征 cos',
+  day_of_week: '星期序号',
+  day_of_week_sin: '星期周期特征 sin',
+  day_of_week_cos: '星期周期特征 cos',
+  month: '月份',
   dayofyear_sin: '年内日期周期特征 sin',
   dayofyear_cos: '年内日期周期特征 cos',
   month_sin: '月份周期特征 sin',
@@ -83,6 +91,15 @@ const FEATURE_FIELD_LABELS = {
   ghi_wm2: '总水平辐照度',
   dni_wm2: '直接法向辐照度',
   dhi_wm2: '散射水平辐照度',
+  clearsky_ghi_wm2: '晴空总水平辐照度',
+  clearsky_dni_wm2: '晴空直接法向辐照度',
+  clearsky_dhi_wm2: '晴空散射水平辐照度',
+  clearsky_ghi_wm2_roll_24h_mean: '晴空总水平辐照度 24 小时均值',
+  clearsky_dni_wm2_roll_24h_mean: '晴空直接辐照度 24 小时均值',
+  clearsky_dhi_wm2_roll_24h_mean: '晴空散射辐照度 24 小时均值',
+  clearsky_ghi_wm2_normalized: '晴空总水平辐照度归一化',
+  clearsky_dni_wm2_normalized: '晴空直接辐照度归一化',
+  clearsky_dhi_wm2_normalized: '晴空散射辐照度归一化',
   temperature_c: '环境温度',
   relative_humidity_pct: '相对湿度',
   wind_speed_ms: '风速',
@@ -105,7 +122,7 @@ const REPORT_LABELS = {
   stage12: '滚动优化调度报告',
   stage13: '策略评价报告',
   stage14: '深度学习预测对比报告',
-  stage15: '储能配置优选报告',
+  stage15: '储能配置敏感性报告',
   stage17: '电池退化成本评估报告',
   stage18: '参考电站仿真报告',
   stage20: '神经调度基线报告',
@@ -131,6 +148,14 @@ export function featureSetLabel(value) {
   const raw = normalizeKey(value)
   if (!raw) return '特征集数据缺失'
   return FEATURE_SET_LABELS[raw] || FEATURE_SET_LABELS[lowerKey(raw)] || raw
+}
+
+export function targetLabel(value) {
+  const raw = normalizeKey(value)
+  if (!raw) return '预测目标缺失'
+  const horizon = raw.match(/t_plus_(\d+)h/i)
+  if (horizon) return `t+${horizon[1]}h`
+  return raw.replace(/^target_pv_power_?/i, '').replace(/_/g, ' ')
 }
 
 export function experimentLabel(experiment) {
@@ -189,7 +214,7 @@ export function taskLabel(commandId) {
     run_strategy: '运行策略评价',
     run_rolling: '生成滚动优化调度方案',
     run_governance: '更新策略评价',
-    run_sensitivity: '运行配置优选',
+    run_sensitivity: '运行配置敏感性分析',
   }
   return labels[commandId] || '运行系统任务'
 }

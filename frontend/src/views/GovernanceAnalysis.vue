@@ -3,13 +3,13 @@
     <PageState
       v-if="loading"
       type="loading"
-      title="正在加载配置治理"
-      message="正在读取储能配置敏感性指标和推荐边界标记。"
+      title="正在加载配置敏感性"
+      message="正在读取容量、功率变化后的收益结果。"
     />
     <PageState
       v-else-if="error"
       type="error"
-      title="配置治理加载失败"
+      title="配置敏感性加载失败"
       :message="error.message"
       retryable
       @retry="loadSensitivity"
@@ -25,44 +25,42 @@
     <template v-else>
 
       <div class="top-section">
-        <ChartCard title="储能配置推荐边界分析">
-          <p class="chart-note">横轴为增量收益，纵轴为循环次数；高亮点代表收益和运行强度更均衡的候选配置。</p>
+        <ChartCard title="容量功率对收益的影响">
+          <p class="chart-note">横轴为收益，纵轴为循环次数；越靠右表示收益越高。</p>
           <v-chart class="chart-lg" :option="paretoOption" theme="dark-tech" autoresize />
         </ChartCard>
       </div>
 
       <div class="bottom-section">
-        <ChartCard title="容量 x 功率增量收益热力图">
-          <p class="chart-note">颜色越暖表示平均增量收益越高，用于快速定位候选容量/功率组合。</p>
+        <ChartCard title="容量和功率组合收益图">
+          <p class="chart-note">颜色越深表示当前结果中的收益越高。</p>
           <v-chart class="chart-md" :option="heatmapOption" theme="dark-tech" autoresize />
         </ChartCard>
 
-        <PageSection title="储能配置敏感性明细">
+        <PageSection title="配置组合明细">
           <el-table :data="sensitivity" style="width:100%" stripe max-height="350" size="small">
-            <el-table-column prop="config_id" label="配置" min-width="220">
+            <el-table-column prop="config_id" label="配置组合" min-width="220">
               <template #default="{ row }">
-                <el-tooltip :content="row.config_id" placement="top">
-                  <span>{{ formatConfigName(row) }}</span>
-                </el-tooltip>
+                <span>{{ formatConfigName(row) }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="capacity_kwh" label="容量 (kWh)" width="105" sortable>
-              <template #default="{ row }">{{ Number(row.capacity_kwh).toFixed(2) }}</template>
+            <el-table-column prop="capacity_multiplier" label="容量倍率" width="105" sortable>
+              <template #default="{ row }">{{ formatMultiplier(row.capacity_multiplier ?? parseConfigId(row.config_id).capMultiplier) }}</template>
             </el-table-column>
-            <el-table-column prop="max_charge_kw" label="功率 (kW)" width="105" sortable>
-              <template #default="{ row }">{{ Number(row.max_charge_kw).toFixed(2) }}</template>
+            <el-table-column prop="power_multiplier" label="功率倍率" width="105" sortable>
+              <template #default="{ row }">{{ formatMultiplier(row.power_multiplier ?? parseConfigId(row.config_id).powMultiplier) }}</template>
             </el-table-column>
-            <el-table-column prop="incremental_revenue_eur" label="仿真增量收益（欧元）" width="150" sortable>
+            <el-table-column prop="incremental_revenue_eur" label="相比无储能收益（元）" width="170" sortable>
               <template #default="{ row }">
                 <span :class="Number(row.incremental_revenue_eur) >= 0 ? 'pos' : 'neg'">
-                  {{ Number(row.incremental_revenue_eur).toFixed(3) }}
+                  {{ formatYuanFromEur(row.incremental_revenue_eur, 2) }}
                 </span>
               </template>
             </el-table-column>
             <el-table-column prop="cycle_equivalent_count" label="循环" width="85" sortable>
               <template #default="{ row }">{{ Number(row.cycle_equivalent_count).toFixed(0) }}</template>
             </el-table-column>
-            <el-table-column prop="pareto_front" label="推荐边界" width="100">
+            <el-table-column prop="pareto_front" label="较优组合" width="100">
               <template #default="{ row }">
                 <span class="pareto-tag" :class="{ active: isTrue(row.pareto_front) }">{{ isTrue(row.pareto_front) ? '是' : '-' }}</span>
               </template>
@@ -87,6 +85,7 @@ import PageState from '../components/PageState.vue'
 import { buildParetoOption, buildRevenueHeatmapOption } from '../charts/governanceCharts'
 import { fetchSensitivityMetrics } from '../services/governanceService'
 import { normalizeApiError } from '../utils/api'
+import { formatYuanFromEur } from '../utils/currency'
 
 use([CanvasRenderer, ScatterChart, HeatmapChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, VisualMapComponent])
 
@@ -136,7 +135,7 @@ function formatConfigName(row) {
   if (cap != null) parts.push(`容量 ${formatMultiplier(cap)}`)
   if (pow != null) parts.push(`功率 ${formatMultiplier(pow)}`)
   if (obj != null) parts.push(`目标组合 ${String(obj).replace(/^objective_?/i, '')}`)
-  return parts.length ? parts.join(' / ') : (row.config_id || '—')
+  return parts.length ? parts.join(' / ') : '配置组合'
 }
 
 async function loadSensitivity() {

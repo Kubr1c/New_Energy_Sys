@@ -1,5 +1,22 @@
 <template>
-  <div class="metric-card glass-card animate-fade-in-up">
+  <button
+    v-if="clickable"
+    type="button"
+    class="metric-card metric-card-button glass-card animate-fade-in-up"
+    @click="$emit('click')"
+  >
+    <div v-if="icon" class="metric-icon" :style="{ background: gradient }">
+      <el-icon v-if="iconType === 'component'" :size="22">
+        <component :is="icon" />
+      </el-icon>
+      <span v-else>{{ icon }}</span>
+    </div>
+    <div class="metric-body">
+      <div class="metric-value display-number">{{ value }}</div>
+      <div class="metric-label">{{ label }}</div>
+    </div>
+  </button>
+  <div v-else class="metric-card glass-card animate-fade-in-up">
     <div v-if="icon" class="metric-icon" :style="{ background: gradient }">
       <el-icon v-if="iconType === 'component'" :size="22">
         <component :is="icon" />
@@ -14,6 +31,8 @@
 </template>
 
 <script setup>
+defineEmits(['click'])
+
 defineProps({
   label: {
     type: String,
@@ -35,6 +54,10 @@ defineProps({
     type: String,
     default: 'var(--gradient-cyan)',
   },
+  clickable: {
+    type: Boolean,
+    default: false,
+  },
 })
 </script>
 
@@ -45,6 +68,25 @@ defineProps({
   gap: var(--space-md);
   min-width: 0;
   padding: 20px 24px;
+}
+
+.metric-card-button {
+  border: 1px solid var(--border-glass);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.metric-card-button:hover {
+  border-color: var(--border-active);
+  transform: translateY(-1px);
+}
+
+.metric-card-button:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
 }
 
 .metric-icon {

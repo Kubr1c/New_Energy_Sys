@@ -231,7 +231,9 @@ const dailyEnergyMetrics = computed(() => computeDailyEnergyMetrics(dailySummary
 const improvementRatio = computed(() => {
   const pRmse = persistenceMetrics.value.rmse
   const hRmse = horizonMetrics.value.rmse
-  return pRmse > 0 ? ((1 - hRmse / pRmse) * 100).toFixed(1) : '-'
+  return Number.isFinite(Number(pRmse)) && Number(pRmse) > 0 && Number.isFinite(Number(hRmse))
+    ? ((1 - Number(hRmse) / Number(pRmse)) * 100).toFixed(1)
+    : '数据不足'
 })
 const metricGroups = computed(() => {
   const h = horizonMetrics.value
@@ -251,16 +253,16 @@ const metricGroups = computed(() => {
     {
       title: '发电量类',
       items: [
-        { key: 'actual_kwh', label: selectedGranularity.value === 'hour' ? '当前范围实际发电量' : '图表范围实际发电量', value: `${formatMetric(d.actualKwh, 2)} kWh` },
-        { key: 'pred_kwh', label: selectedGranularity.value === 'hour' ? '当前范围预测发电量' : '图表范围预测发电量', value: `${formatMetric(d.predKwh, 2)} kWh` },
-        { key: 'energy_bias', label: '当前范围误差率', value: `${formatMetric(d.errorPct, 2)}%` },
+        { key: 'actual_kwh', label: selectedGranularity.value === 'hour' ? '当前范围实际发电量' : '图表范围实际发电量', value: formatMetricWithUnit(d.actualKwh, 2, 'kWh') },
+        { key: 'pred_kwh', label: selectedGranularity.value === 'hour' ? '当前范围预测发电量' : '图表范围预测发电量', value: formatMetricWithUnit(d.predKwh, 2, 'kWh') },
+        { key: 'energy_bias', label: '当前范围误差率', value: formatMetricWithUnit(d.errorPct, 2, '%') },
       ],
     },
     {
       title: '基准对比类',
       items: [
         { key: 'persistence_rmse', label: '持续性基准 RMSE', value: formatMetric(p.rmse, 4) },
-        { key: 'improvement', label: '相对基准提升率', value: `${improvementRatio.value}%` },
+        { key: 'improvement', label: '相对基准提升率', value: improvementRatio.value === '数据不足' ? '数据不足' : `${improvementRatio.value}%` },
       ],
     },
   ]
@@ -311,32 +313,43 @@ function formatMetric(value, digits) {
   const num = Number(value)
   return Number.isFinite(num) ? num.toFixed(digits) : '-'
 }
+function formatMetricWithUnit(value, digits, unit) {
+  const text = formatMetric(value, digits)
+  if (text === '-') return '数据不足'
+  return unit === '%' ? `${text}%` : `${text} ${unit}`
+}
 function computeMetrics(data, summary, horizon, experiment) {
   const day = data.filter(row => row.horizon_hours === horizon && row.experiment === experiment && row.solar_elevation_deg != null && row.solar_elevation_deg > 5)
   if (!day.length) {
     const dailyRows = Object.values(summary || {})
       .map(item => item.experiments?.[experiment]?.[String(horizon)])
       .filter(Boolean)
-    if (!dailyRows.length) return { rmse: 0, mae: 0, bias: 0, nrmse: 0, count: 0 }
+    if (!dailyRows.length) return { rmse: null, mae: null, bias: null, nrmse: null, count: 0 }
     const avg = key => {
       const values = dailyRows.map(item => Number(item[key])).filter(Number.isFinite)
-      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
     }
-    return { rmse: avg('rmse_kw'), mae: avg('mae_kw'), bias: avg('bias_kw'), nrmse: 0, count: dailyRows.length }
+    return { rmse: avg('rmse_kw'), mae: avg('mae_kw'), bias: avg('bias_kw'), nrmse: avg('nrmse_capacity'), count: dailyRows.length }
   }
-  const errors = day.map(row => row.error_kw ?? (row.prediction_kw - row.actual_kw))
-  const actuals = day.map(row => row.actual_kw)
+  const errors = day
+    .map(row => Number(row.error_kw ?? (row.prediction_kw - row.actual_kw)))
+    .filter(Number.isFinite)
+  const actuals = day.map(row => Number(row.actual_kw)).filter(Number.isFinite)
   const n = errors.length
+  if (!n || !actuals.length) return { rmse: null, mae: null, bias: null, nrmse: null, count: 0 }
   const rmse = Math.sqrt(errors.reduce((sum, value) => sum + value * value, 0) / n)
   const mae = errors.reduce((sum, value) => sum + Math.abs(value), 0) / n
   const bias = errors.reduce((sum, value) => sum + value, 0) / n
   const meanActual = actuals.reduce((sum, value) => sum + value, 0) / actuals.length
-  return { rmse, mae, bias, nrmse: meanActual > 0 ? rmse / meanActual : 0, count: n }
+  return { rmse, mae, bias, nrmse: meanActual > 0 ? rmse / meanActual : null, count: n }
 }
 function computePersistenceMetrics(data, horizon, experiment) {
   const filtered = data.filter(row => row.horizon_hours === horizon && row.experiment === experiment && row.solar_elevation_deg != null && row.solar_elevation_deg > 5)
-  if (!filtered.length) return { rmse: 0 }
-  const errors = filtered.map(row => (row.persistence_origin_kw ?? 0) - row.actual_kw)
+  if (!filtered.length) return { rmse: null }
+  const errors = filtered
+    .map(row => Number(row.persistence_origin_kw) - Number(row.actual_kw))
+    .filter(Number.isFinite)
+  if (!errors.length) return { rmse: null }
   return { rmse: Math.sqrt(errors.reduce((sum, value) => sum + value * value, 0) / errors.length) }
 }
 function computeDailyEnergyMetrics(summary, data, horizon, experiment) {
@@ -347,9 +360,9 @@ function computeDailyEnergyMetrics(summary, data, horizon, experiment) {
   // 优先读取后端 daily_summary 中“预测方案 + 预测时长”的组合结果。
   // 这个结构能避免把不同实验或不同时长的预测值混算到同一张答辩指标卡里。
   Object.values(summary || {}).forEach(day => {
-    const actual = Number(day.daily_actual_kwh ?? 0)
+    const actual = Number(day.daily_actual_kwh)
     const pred = Number(day.experiments?.[experiment]?.[String(horizon)]?.daily_pred_kwh)
-    if (Number.isFinite(pred)) {
+    if (Number.isFinite(actual) && Number.isFinite(pred)) {
       totalActual += actual
       totalPred += pred
       matchedDays += 1
@@ -374,7 +387,8 @@ function computeDailyEnergyMetrics(summary, data, horizon, experiment) {
     })
   }
 
-  const errorPct = totalActual > 0 ? ((totalPred - totalActual) / totalActual) * 100 : 0
+  if (!matchedDays) return { actualKwh: null, predKwh: null, errorPct: null, matchedDays: 0 }
+  const errorPct = totalActual > 0 ? ((totalPred - totalActual) / totalActual) * 100 : null
   return { actualKwh: totalActual, predKwh: totalPred, errorPct, matchedDays }
 }
 function goDate(delta) {

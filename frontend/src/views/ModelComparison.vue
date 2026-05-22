@@ -24,17 +24,27 @@
     />
     <template v-else>
 
-      <PageSection title="测试集模型排行榜">
+      <PageSection title="预测模型测试结果">
         <template #actions>
-          <span class="table-hint">默认展示测试集 Top10，误差指标越低表示模型表现越好。</span>
-          <el-select v-model="selectedFeatureSet" size="small" style="width: 220px">
-            <el-option
-              v-for="option in featureSetOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
+          <span class="table-hint">同一预测时长内比较，误差越低越好。</span>
+          <div class="leaderboard-filters">
+            <el-select v-model="selectedTarget" size="small" style="width: 150px">
+              <el-option
+                v-for="option in targetOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+            <el-select v-model="selectedFeatureSet" size="small" style="width: 220px">
+              <el-option
+                v-for="option in featureSetOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </div>
         </template>
         <el-table
           :data="sortedTopMetrics"
@@ -56,6 +66,9 @@
           <el-table-column prop="feature_set" label="特征集" min-width="170">
             <template #default="{ row }"><span class="feat-tag">{{ featureSetLabel(row.feature_set) }}</span></template>
           </el-table-column>
+          <el-table-column prop="target" label="预测目标/时长" width="130">
+            <template #default="{ row }"><span class="feat-tag">{{ targetLabel(row.target) }}</span></template>
+          </el-table-column>
           <el-table-column prop="nrmse_capacity" label="nRMSE" width="110" sortable>
             <template #default="{ row }">{{ fmtNum(row.nrmse_capacity) }}</template>
           </el-table-column>
@@ -72,12 +85,12 @@
       </PageSection>
 
       <div class="chart-row">
-        <ChartCard title="测试集 nRMSE 对比">
-          <p class="chart-note">柱状图与排行榜使用同一份 Top10 排序数据；数值越低表示误差越小。</p>
+        <ChartCard title="测试集误差对比">
+          <p class="chart-note">用于比较不同预测模型在同一预测时长下的误差表现，数值越低表示误差越小。</p>
           <v-chart class="chart" :option="barChartOption" theme="dark-tech" autoresize />
         </ChartCard>
-        <ChartCard title="多指标误差雷达图">
-          <p class="chart-note">雷达图展示默认 Top10 中前 5 个模型的误差结构，用于解释不同模型的表现差异。</p>
+        <ChartCard title="多指标误差展示">
+          <p class="chart-note">雷达图用于同时展示多项误差指标，越靠近中心表示整体误差越低。</p>
           <v-chart class="chart" :option="radarChartOption" theme="dark-tech" autoresize />
         </ChartCard>
       </div>
@@ -98,7 +111,7 @@ import PageState from '../components/PageState.vue'
 import { buildModelBarChartOption, buildModelRadarChartOption, fmtNum, modelColor } from '../charts/modelCharts'
 import { fetchModelComparison } from '../services/modelService'
 import { normalizeApiError } from '../utils/api'
-import { featureSetLabel, modelLabel } from '../utils/displayLabels'
+import { featureSetLabel, modelLabel, targetLabel } from '../utils/displayLabels'
 
 use([CanvasRenderer, BarChart, RadarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, RadarComponent])
 
@@ -106,14 +119,24 @@ const PAGE_SIZE = 10
 
 const tabularMetrics = ref([])
 const dlMetrics = ref([])
+const selectedTarget = ref('target_pv_power_t_plus_24h')
 const selectedFeatureSet = ref('all')
 const currentPage = ref(1)
 const loading = ref(false)
 const error = ref(null)
 
 const allTestMetrics = computed(() => [...tabularMetrics.value, ...dlMetrics.value].filter(row => row.split === 'test'))
+const targetOptions = computed(() => {
+  const targets = [...new Set(allTestMetrics.value.map(row => row.target).filter(Boolean))]
+    .sort((a, b) => targetLabel(a).localeCompare(targetLabel(b), 'zh-CN'))
+  return targets.map(value => ({ label: targetLabel(value), value }))
+})
+const targetFilteredMetrics = computed(() => {
+  if (!selectedTarget.value) return allTestMetrics.value
+  return allTestMetrics.value.filter(row => row.target === selectedTarget.value)
+})
 const featureSetOptions = computed(() => {
-  const sets = [...new Set(allTestMetrics.value.map(row => row.feature_set).filter(Boolean))]
+  const sets = [...new Set(targetFilteredMetrics.value.map(row => row.feature_set).filter(Boolean))]
     .sort((a, b) => featureSetLabel(a).localeCompare(featureSetLabel(b), 'zh-CN'))
   return [
     { label: '全部特征集', value: 'all' },
@@ -121,12 +144,12 @@ const featureSetOptions = computed(() => {
   ]
 })
 const filteredTestMetrics = computed(() => {
-  if (selectedFeatureSet.value === 'all') return allTestMetrics.value
-  return allTestMetrics.value.filter(row => row.feature_set === selectedFeatureSet.value)
+  if (selectedFeatureSet.value === 'all') return targetFilteredMetrics.value
+  return targetFilteredMetrics.value.filter(row => row.feature_set === selectedFeatureSet.value)
 })
 const sortedMetrics = computed(() => [...filteredTestMetrics.value]
   .sort((a, b) => Number(a.nrmse_capacity || Infinity) - Number(b.nrmse_capacity || Infinity))
-  .map((row, index) => ({ ...row, rankKey: `${row.model}-${row.feature_set}-${index}` })))
+  .map((row, index) => ({ ...row, rankKey: `${row.model}-${row.feature_set}-${row.target}-${row.window_size}-${index}` })))
 const sortedTopMetrics = computed(() => sortedMetrics.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE))
 const bestMetric = computed(() => sortedMetrics.value[0] || {})
 const baselineMetric = computed(() => sortedMetrics.value.find(row => /persistence|baseline|linear/i.test(String(row.model))) || sortedMetrics.value[sortedMetrics.value.length - 1] || {})
@@ -143,6 +166,7 @@ const modelInsight = computed(() => {
     tone: bestMetric.value.model ? 'positive' : 'warning',
     items: [
       `最优特征集：${featureSetLabel(bestMetric.value.feature_set)}。`,
+      `预测时长：${targetLabel(selectedTarget.value)}。`,
       `相对 ${modelLabel(baselineMetric.value.model)} 的 nRMSE 改善：${improvement}。`,
       `当前筛选范围包含 ${sortedMetrics.value.length} 条测试集记录；默认页显示前 ${PAGE_SIZE} 条。`,
     ],
@@ -152,8 +176,17 @@ const modelInsight = computed(() => {
 const barChartOption = computed(() => buildModelBarChartOption(sortedTopMetrics.value))
 const radarChartOption = computed(() => buildModelRadarChartOption(sortedTopMetrics.value))
 
-watch(selectedFeatureSet, () => {
+watch([selectedTarget, selectedFeatureSet], () => {
   currentPage.value = 1
+})
+
+watch(targetOptions, (options) => {
+  if (!options.length) return
+  if (!options.some(option => option.value === selectedTarget.value)) {
+    selectedTarget.value = options.some(option => option.value === 'target_pv_power_t_plus_24h')
+      ? 'target_pv_power_t_plus_24h'
+      : options[0].value
+  }
 })
 
 function leaderboardRowClass({ rowIndex }) {
@@ -185,6 +218,7 @@ onMounted(loadModels)
 .table-hint,
 .chart-note { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
 .chart-note { margin-bottom: var(--space-md); }
+.leaderboard-filters { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .feat-tag {
   background: rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-full);

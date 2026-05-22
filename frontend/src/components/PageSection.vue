@@ -6,7 +6,9 @@
         <slot name="actions" />
       </div>
     </div>
-    <slot />
+    <div class="section-body">
+      <slot />
+    </div>
   </section>
 </template>
 
@@ -22,7 +24,8 @@ defineProps({
 <style scoped>
 .page-section {
   min-width: 0;
-  padding: var(--space-lg);
+  padding: 0;
+  overflow: hidden;
 }
 
 .section-header {
@@ -30,7 +33,9 @@ defineProps({
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  margin-bottom: var(--space-md);
+  min-height: 58px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border-glass);
 }
 
 .section-header h3 {
@@ -47,11 +52,20 @@ defineProps({
   flex-shrink: 0;
 }
 
+.section-body {
+  padding: 18px 20px 20px;
+}
+
 @media (max-width: 767px) {
   .section-header {
     align-items: flex-start;
     flex-direction: column;
     gap: 12px;
+    padding: 16px;
+  }
+
+  .section-body {
+    padding: 16px;
   }
 }
 </style>
